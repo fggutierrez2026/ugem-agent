@@ -1,9 +1,10 @@
 # μgem agent — Project Memory
 
 ## Status
-- Target: **v0.1 MVP** (`/Q&A`); implementation not started in this documentation bundle.
-- Current focus: establish Node.js CLI, llama.cpp-compatible streaming, rich terminal presentation, metrics and settings.
-- Next step: `PLAN.md` task **T001**.
+- Target: **v0.1 MVP** (`/Q&A`).
+- T001 is complete: npm metadata and the `ugem` entry point, modular `src/` skeleton, interactive input, `/help`, `/exit`, Ctrl+C handling, mockable I/O and native `node:test` coverage are present.
+- Verified on Linux with Node.js 24.21.0 and npm 11.19.0: `npm run check` passed (lint, format check and 2 test files), and CLI smoke tests confirmed local help/exit plus a clear inaccessible-endpoint error. Windows runtime behavior remains unverified because no Windows environment was available.
+- Next step: `PLAN.md` task **T002**.
 
 ## Agreed architecture
 - Minimalist Node.js 20+ runtime for Windows/Linux; default OpenAI-compatible local server (`llama.cpp`).
@@ -24,4 +25,4 @@
 - Choose rendering libraries only after checking their current Node.js compatibility and maintenance.
 
 ## Last documentation change
-- 2026-10-09: initial consolidated design and v0.1 checklist created. No source code or tests produced in this step.
+- 2026-10-09: completed and verified T001 on Linux; Node.js 24 LTS was installed for the development user.

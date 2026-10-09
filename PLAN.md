@@ -11,10 +11,10 @@
 ## Foundation
 
 ### T001 — Bootstrap CLI and test harness
-- [ ] Initialize npm project, Node.js >=20 engine, entry-point and `ugem` command.
-- [ ] Create minimal modular `src/` layout with CLI, provider, session, renderer, metrics, settings.
-- [ ] Implement terminal-safe input loop, help, exit, interrupt handling (Ctrl+C).
-- [ ] Add native `node:test` (or justify alternative), formatting/lint baseline, mockable stdout/stdin.
+- [x] Initialize npm project, Node.js >=20 engine, entry-point and `ugem` command.
+- [x] Create minimal modular `src/` layout with CLI, provider, session, renderer, metrics, settings.
+- [x] Implement terminal-safe input loop, help, exit, interrupt handling (Ctrl+C).
+- [x] Add native `node:test` (or justify alternative), formatting/lint baseline, mockable stdout/stdin.
 - **Accept:** CLI starts without a model server, `/help` and `/exit` work, clear error on inaccessible endpoint, tests run on supported Node.
 
 ### T002 — Compatible model client
