@@ -1,0 +1,20 @@
+  Heading
+
+A bold and soft link (https://example.test) with code.
+
+│ Quoted text
+
+1. Parent item
+  • Nested item
+
+Name  │ Description
+──────┼───────────────────────────────────────────────────────────────────
+Alpha │ A deliberately long table value that must wrap on narrow terminals
+
+  const value = 42;
+
+Inline E = mc².
+
+  (a)⁄(b) ≤ √(x)
+
+Unsupported ⟦LaTeX: \begin{matrix}a&b\end{matrix}⟧.

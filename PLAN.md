@@ -32,11 +32,11 @@
 - **Accept:** response streams without duplicated/missing text; `/clear` removes conversational history; no tool calls or file edits.
 
 ### T004 — Rich terminal renderer
-- [ ] Style headings, emphasis, quotes, lists, links, tables and inline code as rendered terminal content, not raw Markdown delimiters.
-- [ ] Render fenced code without fences; preserve indentation, optional syntax highlighting and safe ANSI handling.
-- [ ] Render common inline/display math as legible Unicode; define truthful fallback for unsupported LaTeX.
-- [ ] Support streaming Markdown with buffering for incomplete blocks, wrapping and terminal resize.
-- [ ] Add snapshot/golden tests with split streams, nested lists, tables, LaTeX and narrow terminals.
+- [x] Style headings, emphasis, quotes, lists, links, tables and inline code as rendered terminal content, not raw Markdown delimiters.
+- [x] Render fenced code without fences; preserve indentation, optional syntax highlighting and safe ANSI handling.
+- [x] Render common inline/display math as legible Unicode; define truthful fallback for unsupported LaTeX.
+- [x] Support streaming Markdown with buffering for incomplete blocks, wrapping and terminal resize.
+- [x] Add snapshot/golden tests with split streams, nested lists, tables, LaTeX and narrow terminals.
 - **Accept:** `# Heading` displays as styled heading; no raw fences for valid blocks; no lost/duplicated text; math never silently changes meaning.
 
 ### T005 — Metrics and context telemetry

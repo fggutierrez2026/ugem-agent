@@ -1,13 +1,33 @@
-export function createRenderer({ output = process.stdout } = {}) {
+import { createMarkdownStream } from './markdown.js';
+
+export function createRenderer({
+  output = process.stdout,
+  color = Boolean(output.isTTY && !process.env.NO_COLOR),
+  width = () => output.columns ?? 80,
+} = {}) {
+  let stream;
+
+  function currentStream() {
+    stream ??= createMarkdownStream({
+      write: (value) => output.write(value),
+      width,
+      color,
+    });
+    return stream;
+  }
+
   return {
     writeAnswer(content) {
-      output.write(`${content}\n`);
+      currentStream().write(content);
+      currentStream().end();
+      stream = undefined;
     },
     writeChunk(content) {
-      output.write(content);
+      currentStream().write(content);
     },
     endAnswer() {
-      output.write('\n');
+      currentStream().end();
+      stream = undefined;
     },
   };
 }

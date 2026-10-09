@@ -85,6 +85,21 @@ test('streamed chunks render immediately and follow-ups receive history', async 
   ]);
 });
 
+test('rendering does not alter the raw assistant message kept in history', async () => {
+  const output = capture();
+  const calls = [];
+  const cli = createCli({
+    output,
+    error: capture(),
+    provider: streamingProvider([['**bold**'], ['done']], calls),
+  });
+
+  await cli.handleLine('first');
+  await cli.handleLine('follow-up');
+  assert.match(output.read(), /^bold\n/);
+  assert.equal(calls[1][1].content, '**bold**');
+});
+
 test('/Q&A enters the mode and /Q&A <question> asks once', async () => {
   const output = capture();
   const calls = [];
