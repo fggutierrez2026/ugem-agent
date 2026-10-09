@@ -18,10 +18,10 @@
 - **Accept:** CLI starts without a model server, `/help` and `/exit` work, clear error on inaccessible endpoint, tests run on supported Node.
 
 ### T002 — Compatible model client
-- [ ] Configurable base URL, model ID, request timeout and optional credential via environment (never print secrets).
-- [ ] Implement `POST /v1/chat/completions` and parse standard response/errors.
-- [ ] Support `/v1/models` discovery when exposed; gracefully handle server with only one model.
-- [ ] Add mock-server tests for success, HTTP error, disconnect, malformed response.
+- [x] Configurable base URL, model ID, request timeout and optional credential via environment (never print secrets).
+- [x] Implement `POST /v1/chat/completions` and parse standard response/errors.
+- [x] Support `/v1/models` discovery when exposed; gracefully handle server with only one model.
+- [x] Add mock-server tests for success, HTTP error, disconnect, malformed response.
 - **Accept:** can get a reply from a compatible server; mock tests confirm failure paths.
 
 ### T003 — Streaming and Q&A conversation

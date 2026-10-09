@@ -58,7 +58,7 @@ test('an inaccessible endpoint produces a clear error and rolls back the turn', 
   });
 
   assert.equal(await cli.handleLine('hello'), true);
-  assert.match(error.read(), /Unable to reach the model endpoint: connection refused/);
+  assert.match(error.read(), /Model request failed: connection refused/);
   assert.deepEqual(seen, []);
 });
 

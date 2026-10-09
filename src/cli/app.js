@@ -49,7 +49,7 @@ export function createCli({
       renderer.writeAnswer(answer);
     } catch (cause) {
       session.removeLastUserMessage();
-      error.write(`Unable to reach the model endpoint: ${cause.message}\n`);
+      error.write(`Model request failed: ${cause.message}\n`);
     }
     return true;
   }

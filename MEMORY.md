@@ -3,8 +3,9 @@
 ## Status
 - Target: **v0.1 MVP** (`/Q&A`).
 - T001 is complete: npm metadata and the `ugem` entry point, modular `src/` skeleton, interactive input, `/help`, `/exit`, Ctrl+C handling, mockable I/O and native `node:test` coverage are present.
-- Verified on Linux with Node.js 24.21.0 and npm 11.19.0: `npm run check` passed (lint, format check and 2 test files), and CLI smoke tests confirmed local help/exit plus a clear inaccessible-endpoint error. Windows runtime behavior remains unverified because no Windows environment was available.
-- Next step: `PLAN.md` task **T002**.
+- T002 is complete: the compatible provider reads `UGEM_BASE_URL`, `UGEM_MODEL`, `UGEM_REQUEST_TIMEOUT_MS` and optional `UGEM_API_KEY`; handles non-streaming chat completions, typed network/timeout/HTTP/response errors, credential redaction, model discovery and single-model fallback.
+- Verified on Linux with Node.js 24.21.0 and npm 11.19.0: `npm run check` passed with 17 tests, including local mock HTTP success and failure paths. Tests that bind a local port require network permission in the current sandbox. Windows and a real `llama.cpp` server remain unverified.
+- Next step: `PLAN.md` task **T003**.
 
 ## Agreed architecture
 - Minimalist Node.js 20+ runtime for Windows/Linux; default OpenAI-compatible local server (`llama.cpp`).
@@ -25,4 +26,4 @@
 - Choose rendering libraries only after checking their current Node.js compatibility and maintenance.
 
 ## Last documentation change
-- 2026-10-09: completed and verified T001 on Linux; Node.js 24 LTS was installed for the development user.
+- 2026-10-09: completed and verified T002 against local mock OpenAI-compatible HTTP endpoints on Linux.
