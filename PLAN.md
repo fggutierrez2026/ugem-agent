@@ -25,10 +25,10 @@
 - **Accept:** can get a reply from a compatible server; mock tests confirm failure paths.
 
 ### T003 — Streaming and Q&A conversation
-- [ ] Parse SSE streaming incrementally, including `[DONE]`, partial UTF-8 and split event boundaries.
-- [ ] Implement `/Q&A` (and Q&A default startup), conversation history, `/clear`, cancellation/interrupt and follow-up questions.
-- [ ] Distinguish one-shot `/Q&A <question>` from entered mode; do not inject project docs/skills/tools.
-- [ ] Handle interrupted streams without corrupting history.
+- [x] Parse SSE streaming incrementally, including `[DONE]`, partial UTF-8 and split event boundaries.
+- [x] Implement `/Q&A` (and Q&A default startup), conversation history, `/clear`, cancellation/interrupt and follow-up questions.
+- [x] Distinguish one-shot `/Q&A <question>` from entered mode; do not inject project docs/skills/tools.
+- [x] Handle interrupted streams without corrupting history.
 - **Accept:** response streams without duplicated/missing text; `/clear` removes conversational history; no tool calls or file edits.
 
 ### T004 — Rich terminal renderer

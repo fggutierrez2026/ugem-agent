@@ -11,6 +11,9 @@ export function createSession() {
     removeLastUserMessage() {
       if (history.at(-1)?.role === 'user') history.pop();
     },
+    clear() {
+      history.length = 0;
+    },
     messages() {
       return history.map((message) => ({ ...message }));
     },

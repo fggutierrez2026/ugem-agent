@@ -1,3 +1,5 @@
+import { parseSse } from './sse.js';
+
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
 const DEFAULT_MODEL = 'local-model';
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -147,6 +149,134 @@ export function createProvider(options = {}) {
         );
       }
       return content;
+    },
+
+    async *stream(messages, { signal } = {}) {
+      const endpoint = `${baseUrl}/v1/chat/completions`;
+      const controller = new AbortController();
+      let timedOut = false;
+      const onAbort = () => controller.abort(signal.reason);
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs);
+      timer.unref?.();
+
+      try {
+        let response;
+        try {
+          response = await fetchImpl(endpoint, {
+            method: 'POST',
+            headers: headers(),
+            body: JSON.stringify({ model, messages, stream: true }),
+            signal: controller.signal,
+          });
+        } catch (cause) {
+          if (signal?.aborted) {
+            throw new ProviderError('Model request was cancelled', {
+              code: 'cancelled',
+              cause,
+            });
+          }
+          if (timedOut) {
+            throw new ProviderError(`Model endpoint timed out after ${timeoutMs} ms`, {
+              code: 'timeout',
+              cause,
+            });
+          }
+          throw new ProviderError(`${baseUrl} is inaccessible`, {
+            code: 'network_error',
+            cause,
+          });
+        }
+        clearTimeout(timer);
+
+        if (!response.ok) {
+          let text;
+          try {
+            text = await response.text();
+          } catch (cause) {
+            if (signal?.aborted) {
+              throw new ProviderError('Model request was cancelled', {
+                code: 'cancelled',
+                cause,
+              });
+            }
+            throw new ProviderError('Model error response disconnected unexpectedly', {
+              code: 'network_error',
+              cause,
+            });
+          }
+          let detail = response.statusText;
+          if (text) {
+            try {
+              const payload = JSON.parse(text);
+              detail = payload?.error?.message ?? payload?.message ?? detail;
+            } catch {
+              detail = text;
+            }
+          }
+          const suffix = detail ? `: ${redact(detail, credential)}` : '';
+          throw new ProviderError(
+            `Model endpoint returned HTTP ${response.status}${suffix}`,
+            { code: 'http_error', status: response.status },
+          );
+        }
+        if (!response.body) {
+          throw new ProviderError('Model endpoint returned no response stream', {
+            code: 'invalid_response',
+          });
+        }
+
+        let done = false;
+        try {
+          for await (const data of parseSse(response.body)) {
+            if (data === '[DONE]') {
+              done = true;
+              break;
+            }
+
+            const payload = parseJson(data, endpoint, credential);
+            const delta = payload?.choices?.[0]?.delta?.content;
+            if (delta != null && typeof delta !== 'string') {
+              throw new ProviderError('Model endpoint returned an invalid stream chunk', {
+                code: 'invalid_response',
+              });
+            }
+            if (delta) yield delta;
+          }
+        } catch (cause) {
+          if (cause instanceof ProviderError) throw cause;
+          if (signal?.aborted) {
+            throw new ProviderError('Model request was cancelled', {
+              code: 'cancelled',
+              cause,
+            });
+          }
+          if (/encoded data was not valid/i.test(cause.message)) {
+            throw new ProviderError('Model endpoint returned invalid UTF-8', {
+              code: 'invalid_response',
+              cause,
+            });
+          }
+          throw new ProviderError('Model stream disconnected unexpectedly', {
+            code: 'network_error',
+            cause,
+          });
+        }
+
+        if (!done) {
+          throw new ProviderError('Model stream ended before [DONE]', {
+            code: 'invalid_response',
+          });
+        }
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+      }
     },
 
     async discoverModels() {

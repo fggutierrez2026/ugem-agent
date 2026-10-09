@@ -174,3 +174,58 @@ test('request timeout aborts an unresponsive server', async () => {
     );
   });
 });
+
+test('stream parses incremental chat chunks through [DONE]', async () => {
+  await withServer(async (request, response) => {
+    assert.deepEqual(JSON.parse(await readBody(request)), {
+      model: 'stream-model',
+      messages: [{ role: 'user', content: 'hello' }],
+      stream: true,
+    });
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write(
+      'data: {"choices":[{"delta":{"role":"assistant","content":null}}]}\n\n',
+    );
+    response.write('data: {"choices":[{"delta":{"content":"Hola "}}]}\n\n');
+    response.write('data: {"choices":[{"delta":{"content":"🌎"}}]}\n\n');
+    response.end('data: [DONE]\n\n');
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl, model: 'stream-model' });
+    const chunks = [];
+    for await (const chunk of provider.stream([
+      { role: 'user', content: 'hello' },
+    ])) {
+      chunks.push(chunk);
+    }
+    assert.deepEqual(chunks, ['Hola ', '🌎']);
+  });
+});
+
+test('stream cancellation aborts the response', async () => {
+  await withServer((request, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+  }, async (baseUrl) => {
+    const controller = new AbortController();
+    const provider = createProvider({ baseUrl });
+    const iterator = provider.stream([], { signal: controller.signal });
+
+    assert.deepEqual(await iterator.next(), { value: 'partial', done: false });
+    controller.abort();
+    await assert.rejects(
+      iterator.next(),
+      (error) => error.code === 'cancelled',
+    );
+  });
+});
+
+test('stream rejects EOF without the [DONE] sentinel', async () => {
+  await withServer((request, response) => {
+    response.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl });
+    await assert.rejects(async () => {
+      for await (const chunk of provider.stream([])) assert.equal(chunk, 'partial');
+    }, (error) => error.code === 'invalid_response' && /\[DONE\]/.test(error.message));
+  });
+});

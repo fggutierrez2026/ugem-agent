@@ -4,6 +4,8 @@ import { createSession } from '../session/index.js';
 import { createRenderer } from '../renderer/index.js';
 
 const HELP = `Commands:
+  /Q&A [question]  Enter Q&A mode or ask a question
+  /clear           Clear conversation history
   /help  Show this help
   /exit  Exit μgem
 
@@ -19,10 +21,36 @@ export function createCli({
   renderer = createRenderer({ output }),
 } = {}) {
   let readline;
-  let interrupted = false;
+  let activeController;
+  let closed = false;
 
   function writePrompt() {
     if (output.isTTY) output.write('› ');
+  }
+
+  async function ask(question) {
+    let answer = '';
+    let wroteChunk = false;
+    activeController = new AbortController();
+    try {
+      session.addUserMessage(question);
+      for await (const chunk of provider.stream(session.messages(), {
+        signal: activeController.signal,
+      })) {
+        answer += chunk;
+        wroteChunk = true;
+        renderer.writeChunk(chunk);
+      }
+      session.addAssistantMessage(answer);
+      renderer.endAnswer();
+    } catch (cause) {
+      if (wroteChunk) renderer.endAnswer();
+      session.removeLastUserMessage();
+      if (cause?.code === 'cancelled') error.write('Model request cancelled.\n');
+      else error.write(`Model request failed: ${cause.message}\n`);
+    } finally {
+      activeController = undefined;
+    }
   }
 
   async function handleLine(rawLine) {
@@ -37,26 +65,35 @@ export function createCli({
 
     if (command === '/exit') return false;
 
+    if (command === '/clear') {
+      session.clear();
+      output.write('Conversation cleared.\n');
+      return true;
+    }
+
+    const qAndA = line.match(/^\/q&a(?:\s+(.+))?$/i);
+    if (qAndA) {
+      if (qAndA[1]) await ask(qAndA[1]);
+      else output.write('Q&A mode active.\n');
+      return true;
+    }
+
     if (command.startsWith('/')) {
       error.write(`Unknown command: ${line}. Use /help to list commands.\n`);
       return true;
     }
 
-    try {
-      session.addUserMessage(line);
-      const answer = await provider.complete(session.messages());
-      session.addAssistantMessage(answer);
-      renderer.writeAnswer(answer);
-    } catch (cause) {
-      session.removeLastUserMessage();
-      error.write(`Model request failed: ${cause.message}\n`);
-    }
+    await ask(line);
     return true;
   }
 
   function interrupt() {
-    if (interrupted) return;
-    interrupted = true;
+    if (activeController) {
+      activeController.abort();
+      return;
+    }
+    if (closed) return;
+    closed = true;
     output.write('\n');
     readline?.close();
   }
