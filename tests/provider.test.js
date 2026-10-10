@@ -165,6 +165,43 @@ test('model discovery falls back for a single-model server', async () => {
   });
 });
 
+test('provider model selection accepts only advertised IDs', async () => {
+  await withServer((request, response) => {
+    assert.equal(request.url, '/v1/models');
+    response.end(JSON.stringify({ data: [{ id: 'alpha' }, { id: 'beta' }] }));
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl, model: 'alpha' });
+
+    assert.deepEqual(await provider.selectModel(' beta '), {
+      model: 'beta',
+      source: 'provider',
+    });
+    assert.equal(provider.configuration().model, 'beta');
+
+    await assert.rejects(
+      provider.selectModel('missing'),
+      (error) => error.code === 'unsupported_model'
+        && /not advertised/.test(error.message),
+    );
+    assert.equal(provider.configuration().model, 'beta');
+  });
+});
+
+test('single-model fallback cannot be changed to an unverified ID', async () => {
+  await withServer((request, response) => {
+    response.writeHead(404, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: { message: 'not found' } }));
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl, model: 'only-model' });
+
+    await assert.rejects(
+      provider.selectModel('other-model'),
+      (error) => error.code === 'unsupported_model',
+    );
+    assert.equal(provider.configuration().model, 'only-model');
+  });
+});
+
 test('runtime inspection reads optional llama.cpp properties truthfully', async () => {
   await withServer((request, response) => {
     assert.equal(request.url, '/props?model=gemma-test&autoload=false');

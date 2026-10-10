@@ -165,7 +165,7 @@ export function createProvider(options = {}) {
           code: 'invalid_configuration',
         });
       }
-      model = modelId;
+      model = modelId.trim();
     },
 
     async runtimeInfo() {
@@ -388,6 +388,24 @@ export function createProvider(options = {}) {
         }
         throw error;
       }
+    },
+
+    async selectModel(modelId) {
+      if (typeof modelId !== 'string' || modelId.trim() === '') {
+        throw new ProviderError('Model ID must not be empty', {
+          code: 'invalid_configuration',
+        });
+      }
+      const requested = modelId.trim();
+      const discovered = await this.discoverModels();
+      if (!discovered.models.includes(requested)) {
+        throw new ProviderError(
+          `Model "${requested}" was not advertised by the endpoint`,
+          { code: 'unsupported_model' },
+        );
+      }
+      model = requested;
+      return Object.freeze({ model, source: discovered.source });
     },
 
     configuration() {

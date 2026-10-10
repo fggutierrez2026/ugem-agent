@@ -5,21 +5,29 @@ import { createSession } from '../session/index.js';
 import { createRenderer } from '../renderer/index.js';
 import { createMetrics } from '../metrics/index.js';
 import {
+  APPEARANCE_MODES,
   formatMetricsPanel,
   formatStartupPanel,
   formatStatusPanel,
+  resolveAppearance,
   THEME_NAMES,
   themePalette,
 } from './status.js';
 
 const ANSI_RESET = '\u001b[0m';
 
+export function terminalSupportsColor(output, env = process.env) {
+  if (!output?.isTTY || env.NO_COLOR != null || env.TERM === 'dumb') return false;
+  if (typeof output.hasColors === 'function') return output.hasColors();
+  return true;
+}
+
 const HELP = `Commands:
   /Q&A [question]  Enter Q&A mode or ask a question
   /clear           Clear conversation history
-  /models [id] [reasoning]  List/select a model; reasoning: auto|on|off
+  /models [id] [options]    List/select; options: reasoning, clear|keep
   /reasoning [mode]         Show/change reasoning for the active model
-  /theme [name]             Show/change color palette
+  /theme [mode] [palette]   mode: auto|dark|light
   /code-color [color]       Show/change fenced-code color
   /stats [on|off]  Show metrics or toggle the per-answer footer
   /help            Show this help
@@ -32,13 +40,15 @@ export function createCli({
   input = process.stdin,
   output = process.stdout,
   error = process.stderr,
+  env = process.env,
   provider = createProvider(),
   session = createSession(),
   renderer = createRenderer({ output }),
   metrics = createMetrics(),
-  color = Boolean(output.isTTY && !process.env.NO_COLOR),
-  localServer = createLocalServer({ provider }),
-  theme = process.env.UGEM_THEME ?? 'classic',
+  color = terminalSupportsColor(output, env),
+  localServer = createLocalServer({ provider, env }),
+  theme = env.UGEM_THEME ?? 'classic',
+  themeMode = env.UGEM_THEME_MODE ?? 'auto',
 } = {}) {
   let readline;
   let activeController;
@@ -47,6 +57,8 @@ export function createCli({
   let runtimeHint = {};
   let contextWarningShown = false;
   let selectedTheme = THEME_NAMES.includes(theme) ? theme : 'classic';
+  let selectedThemeMode = APPEARANCE_MODES.includes(themeMode) ? themeMode : 'auto';
+  let resolvedAppearance = resolveAppearance(selectedThemeMode, env);
 
   function resetPromptStyle() {
     if (!promptStyleActive) return;
@@ -56,14 +68,14 @@ export function createCli({
 
   function writePrompt() {
     if (!output.isTTY) return;
-    const palette = themePalette(selectedTheme);
+    const palette = themePalette(selectedTheme, resolvedAppearance);
     output.write(color ? `${palette.user}you › ` : 'you › ');
     promptStyleActive = color;
   }
 
   function writeAssistantLabel() {
     if (!output.isTTY) return;
-    const palette = themePalette(selectedTheme);
+    const palette = themePalette(selectedTheme, resolvedAppearance);
     output.write(color
       ? `${palette.assistant}μgem ›${ANSI_RESET}\n`
       : 'μgem ›\n');
@@ -74,8 +86,60 @@ export function createCli({
       width: output.columns ?? 80,
       color,
       theme: selectedTheme,
+      appearance: resolvedAppearance,
       ...options,
     }));
+  }
+
+  function resetConversation() {
+    session.clear();
+    metrics.resetContext();
+    contextWarningShown = false;
+  }
+
+  function managedModelSelection() {
+    if (typeof localServer.managesModels === 'function') {
+      return localServer.managesModels();
+    }
+    const status = localServer.configuration?.().status;
+    return status == null && typeof localServer.selectModel === 'function';
+  }
+
+  function parseModelOptions(args) {
+    let reasoning;
+    let history;
+    for (const option of args) {
+      const normalized = option.toLowerCase();
+      if (['auto', 'on', 'off'].includes(normalized) && reasoning == null) {
+        reasoning = normalized;
+      } else if (['clear', 'keep'].includes(normalized) && history == null) {
+        history = normalized;
+      } else {
+        return null;
+      }
+    }
+    return { reasoning, history };
+  }
+
+  function historyChoiceRequired(modelId, history) {
+    const messageCount = session.messages().length;
+    if (messageCount === 0 || history) return false;
+    writeStatus(
+      `Conversation has ${messageCount} messages. Choose how to switch:\n`
+      + `  /models ${modelId} clear  — start a new conversation\n`
+      + `  /models ${modelId} keep   — retain current history`,
+      { title: 'model switch', tone: 'warning' },
+    );
+    return true;
+  }
+
+  function applyHistoryChoice(history) {
+    if (history === 'keep') {
+      contextWarningShown = false;
+      return 'Conversation history kept.';
+    }
+    resetConversation();
+    return 'Conversation cleared.';
   }
 
   async function writeStartup() {
@@ -92,6 +156,15 @@ export function createCli({
       try {
         const inspected = await provider.runtimeInfo();
         runtime = { ...runtime, ...runtimeHint, ...inspected };
+        if (
+          inspected.modelSource === 'configured'
+          && runtimeHint.modelSource === 'provider'
+        ) {
+          runtime.modelSource = 'provider';
+        }
+        if (inspected.status === 'unknown' && runtimeHint.status) {
+          runtime.status = runtimeHint.status;
+        }
         if (inspected.reasoning === 'unknown' && runtimeHint.reasoning) {
           runtime.reasoning = runtimeHint.reasoning;
         }
@@ -108,6 +181,7 @@ export function createCli({
       context: metrics.contextStatus(),
       color,
       theme: selectedTheme,
+      appearance: resolvedAppearance,
     }));
   }
 
@@ -144,6 +218,7 @@ export function createCli({
           width: output.columns ?? 80,
           color,
           theme: selectedTheme,
+          appearance: resolvedAppearance,
         }));
       }
       const capacity = record.context.budget ?? record.context.serverLimit;
@@ -186,68 +261,139 @@ export function createCli({
     if (command === '/exit') return false;
 
     if (command === '/clear') {
-      session.clear();
-      metrics.resetContext();
-      contextWarningShown = false;
+      resetConversation();
       writeStatus('Conversation cleared.', { tone: 'success' });
       return true;
     }
 
     const models = line.match(/^\/models?(?:\s+(.+))?$/i);
     if (models) {
-      if (typeof localServer.listModels !== 'function') {
-        error.write('Local model selection is unavailable.\n');
-        return true;
-      }
       const args = models[1]?.trim().split(/\s+/) ?? [];
-      const [requested, requestedReasoning] = args;
-      if (
-        args.length > 2
-        || (requestedReasoning && !['auto', 'on', 'off'].includes(
-          requestedReasoning.toLowerCase(),
-        ))
-      ) {
-        error.write('Usage: /models [id] [auto|on|off]\n');
+      const requested = args.shift();
+      const options = parseModelOptions(args);
+      if (!options) {
+        error.write(
+          'Usage: /models [id] [auto|on|off] [clear|keep]\n',
+        );
         return true;
       }
+      const managed = managedModelSelection();
       if (!requested) {
-        const available = await localServer.listModels();
-        const active = localServer.configuration?.().preset;
-        const rows = ['Local models:'];
-        for (const item of available) {
-          rows.push(`  ${item.id === active ? '*' : ' '} ${item.id}`
-            + ` · ${item.contextLimit?.toLocaleString('en-US') ?? 'N/A'} ctx`
-            + ` · reasoning ${item.reasoning}`);
+        try {
+          if (managed) {
+            const available = await localServer.listModels();
+            const active = localServer.configuration?.().preset;
+            const rows = ['Managed local models:'];
+            for (const item of available) {
+              rows.push(`  ${item.id === active ? '*' : ' '} ${item.id}`
+                + ` · ${item.contextLimit?.toLocaleString('en-US') ?? 'N/A'} ctx`
+                + ` · reasoning ${item.reasoning}`);
+            }
+            rows.push(
+              'Use /models <id> [auto|on|off] [clear|keep] to select one.',
+            );
+            writeStatus(rows.join('\n'), { title: 'models' });
+          } else {
+            if (typeof provider.discoverModels !== 'function') {
+              throw new Error('Model discovery is unavailable for this provider.');
+            }
+            const discovered = await provider.discoverModels();
+            const active = provider.configuration?.().model;
+            const rows = [discovered.source === 'provider'
+              ? 'Provider-advertised models:'
+              : 'Configured single-model endpoint:'];
+            for (const modelId of discovered.models) {
+              rows.push(`  ${modelId === active ? '*' : ' '} ${modelId}`);
+            }
+            if (discovered.source === 'provider') {
+              rows.push('Use /models <id> [clear|keep] to select one.');
+            } else {
+              rows.push(
+                'Set UGEM_BASE_URL and UGEM_MODEL before starting μgem '
+                + 'to configure another external endpoint.',
+              );
+            }
+            writeStatus(rows.join('\n'), { title: 'models' });
+          }
+        } catch (cause) {
+          error.write(`Could not list models: ${cause.message}\n`);
         }
-        rows.push('Use /models <id> [auto|on|off] to select one.');
-        writeStatus(rows.join('\n'), { title: 'models' });
         return true;
       }
 
-      const previous = localServer.configuration?.();
-      try {
-        const selected = await localServer.selectModel(requested, {
-          reasoning: requestedReasoning?.toLowerCase(),
-          onStatus: () => {},
-        });
-        runtimeHint = selected;
-        if (
-          requested !== previous?.preset
-          || selected.reasoning !== previous?.reasoning
-        ) {
-          session.clear();
-          metrics.resetContext();
-          contextWarningShown = false;
-          writeStatus(
-            `Model changed to ${requested} · reasoning ${selected.reasoning}. `
-            + 'Conversation cleared.',
-            { tone: 'success' },
-          );
-        } else {
-          writeStatus(
-            `Model ${requested} · reasoning ${selected.reasoning} is already active.`,
-          );
+      if (managed) {
+        const previous = localServer.configuration?.();
+        const changes = requested !== previous?.preset
+          || (options.reasoning != null && options.reasoning !== previous?.reasoning);
+        if (changes && historyChoiceRequired(requested, options.history)) return true;
+        try {
+          const selected = await localServer.selectModel(requested, {
+            reasoning: options.reasoning,
+            onStatus: () => {},
+          });
+          runtimeHint = selected;
+          if (changes) {
+            const historyMessage = applyHistoryChoice(options.history);
+            metrics.setContextLimits({ server: selected.contextLimit });
+            writeStatus(
+              `Model changed to ${requested} · reasoning ${selected.reasoning}. `
+              + historyMessage,
+              { tone: 'success' },
+            );
+          } else {
+            writeStatus(
+              `Model ${requested} · reasoning ${selected.reasoning} is already active.`,
+            );
+          }
+          if (output.isTTY) await writeStartup();
+        } catch (cause) {
+          error.write(`Could not change model: ${cause.message}\n`);
         }
+        return true;
+      }
+
+      if (options.reasoning) {
+        error.write(
+          'Reasoning selection is unavailable for this external provider; '
+          + 'use /models <id> [clear|keep].\n',
+        );
+        return true;
+      }
+      const previousModel = provider.configuration?.().model;
+      if (requested === previousModel) {
+        writeStatus(`Model ${requested} is already active.`);
+        return true;
+      }
+      if (historyChoiceRequired(requested, options.history)) return true;
+      if (typeof provider.selectModel !== 'function') {
+        error.write('Provider model selection is unavailable.\n');
+        return true;
+      }
+      try {
+        const selected = await provider.selectModel(requested);
+        runtimeHint = {
+          model: selected.model,
+          modelSource: selected.source,
+          status: 'configured',
+          contextLimit: null,
+          reasoning: 'unknown',
+        };
+        metrics.setContextLimits({ server: null });
+        const historyMessage = applyHistoryChoice(options.history);
+        if (typeof provider.runtimeInfo === 'function') {
+          try {
+            const inspected = await provider.runtimeInfo();
+            runtimeHint = { ...runtimeHint, ...inspected };
+            metrics.setContextLimits({ server: inspected.contextLimit });
+          } catch {
+            // Runtime inspection is optional after a verified request-ID change.
+          }
+        }
+        writeStatus(
+          `Request model set to ${selected.model} (${selected.source}). `
+          + historyMessage,
+          { tone: 'success' },
+        );
         if (output.isTTY) await writeStartup();
       } catch (cause) {
         error.write(`Could not change model: ${cause.message}\n`);
@@ -278,9 +424,7 @@ export function createCli({
         });
         runtimeHint = selected;
         if (selected.reasoning !== previous) {
-          session.clear();
-          metrics.resetContext();
-          contextWarningShown = false;
+          resetConversation();
           writeStatus(
             `Reasoning changed to ${selected.reasoning}. Conversation cleared.`,
             { tone: 'success' },
@@ -295,25 +439,53 @@ export function createCli({
       return true;
     }
 
-    const themeCommand = line.match(/^\/theme(?:\s+(\S+))?$/i);
+    const themeCommand = line.match(/^\/theme(?:\s+(.+))?$/i);
     if (themeCommand) {
-      const requested = themeCommand[1]?.toLowerCase();
-      if (!requested) {
+      const args = themeCommand[1]?.trim().toLowerCase().split(/\s+/) ?? [];
+      if (args.length === 0) {
         writeStatus(
-          `Theme: ${selectedTheme}. Available: ${THEME_NAMES.join(', ')}.`,
+          `Theme: ${selectedTheme} · mode ${selectedThemeMode}`
+          + ` → ${resolvedAppearance}. Palettes: ${THEME_NAMES.join(', ')}.`,
           { title: 'theme' },
         );
         return true;
       }
-      if (!THEME_NAMES.includes(requested)) {
-        error.write(`Usage: /theme [${THEME_NAMES.join('|')}]\n`);
+      let nextTheme = selectedTheme;
+      let nextMode = selectedThemeMode;
+      let sawTheme = false;
+      let sawMode = false;
+      for (const option of args) {
+        if (THEME_NAMES.includes(option) && !sawTheme) {
+          nextTheme = option;
+          sawTheme = true;
+        } else if (APPEARANCE_MODES.includes(option) && !sawMode) {
+          nextMode = option;
+          sawMode = true;
+        } else {
+          error.write(
+            'Usage: /theme [auto|dark|light] '
+            + `[${THEME_NAMES.join('|')}]\n`,
+          );
+          return true;
+        }
+      }
+      if (args.length > 2) {
+        error.write(
+          'Usage: /theme [auto|dark|light] '
+          + `[${THEME_NAMES.join('|')}]\n`,
+        );
         return true;
       }
-      selectedTheme = requested;
-      writeStatus(`Theme changed to ${selectedTheme}.`, {
+      selectedTheme = nextTheme;
+      selectedThemeMode = nextMode;
+      resolvedAppearance = resolveAppearance(selectedThemeMode, env);
+      writeStatus(
+        `Theme changed to ${selectedTheme} · mode ${selectedThemeMode}`
+        + ` → ${resolvedAppearance}.`, {
         title: 'theme',
         tone: 'success',
-      });
+        },
+      );
       return true;
     }
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { Writable } from 'node:stream';
 import test from 'node:test';
-import { createCli, HELP } from '../src/cli/app.js';
+import { createCli, HELP, terminalSupportsColor } from '../src/cli/app.js';
 import { createSession } from '../src/session/index.js';
 import { createMetrics } from '../src/metrics/index.js';
 
@@ -188,13 +188,32 @@ test('/code-color changes the fenced-code color locally', async () => {
 test('/theme selects another UI color combination', async () => {
   const output = capture();
   output.isTTY = true;
-  const cli = createCli({ output, error: capture(), color: true });
+  const cli = createCli({
+    output,
+    error: capture(),
+    color: true,
+    env: { TERM: 'xterm' },
+  });
 
-  await cli.handleLine('/theme forest');
+  await cli.handleLine('/theme light forest');
   cli.writePrompt();
 
-  assert.match(output.read(), /Theme changed to forest\./);
+  assert.match(output.read(), /Theme changed to forest · mode light → light\./);
   assert.match(output.read(), /\u001b\[32myou › /);
+});
+
+test('terminal color support respects capability and no-color signals', () => {
+  assert.equal(terminalSupportsColor({ isTTY: false }, {}), false);
+  assert.equal(terminalSupportsColor({ isTTY: true }, { TERM: 'dumb' }), false);
+  assert.equal(terminalSupportsColor({ isTTY: true }, { NO_COLOR: '' }), false);
+  assert.equal(
+    terminalSupportsColor({ isTTY: true, hasColors: () => false }, {}),
+    false,
+  );
+  assert.equal(
+    terminalSupportsColor({ isTTY: true, hasColors: () => true }, { WT_SESSION: '1' }),
+    true,
+  );
 });
 
 test('context use at 90 percent emits one warning even when the footer is off', async () => {
@@ -218,7 +237,7 @@ test('context use at 90 percent emits one warning even when the footer is off', 
   assert.match(output.read(), /100\.0% used · 0 tokens available/);
 });
 
-test('/models lists presets and clears history after a successful switch', async () => {
+test('/models lists managed presets and clears history when requested', async () => {
   const output = capture();
   const session = createSession();
   session.addUserMessage('old context');
@@ -245,12 +264,158 @@ test('/models lists presets and clears history after a successful switch', async
   });
 
   await cli.handleLine('/models');
-  await cli.handleLine('/models qwen3.5-4b off');
+  await cli.handleLine('/models qwen3.5-4b off clear');
 
   assert.match(output.read(), /\* gemma4-e4b · 32,768 ctx · reasoning auto/);
   assert.match(output.read(), /qwen3\.5-4b · 65,536 ctx · reasoning off/);
   assert.match(output.read(), /Model changed to qwen3\.5-4b · reasoning off/);
+  assert.match(output.read(), /Conversation cleared/);
   assert.deepEqual(session.messages(), []);
+});
+
+test('/models requires a clear or keep decision when history exists', async () => {
+  const output = capture();
+  const session = createSession();
+  session.addUserMessage('old context');
+  let selections = 0;
+  const localServer = {
+    listModels: async () => [],
+    configuration: () => ({ preset: 'alpha', reasoning: 'auto' }),
+    async selectModel() {
+      selections += 1;
+      return { model: 'beta', reasoning: 'auto', contextLimit: 4_096 };
+    },
+  };
+  const cli = createCli({
+    output,
+    error: capture(),
+    session,
+    localServer,
+    provider: streamingProvider([]),
+  });
+
+  await cli.handleLine('/models beta');
+
+  assert.match(output.read(), /Conversation has 1 messages/);
+  assert.match(output.read(), /\/models beta clear/);
+  assert.match(output.read(), /\/models beta keep/);
+  assert.equal(selections, 0);
+  assert.deepEqual(session.messages(), [{ role: 'user', content: 'old context' }]);
+});
+
+test('/models can keep history across a managed model switch', async () => {
+  const output = capture();
+  const session = createSession();
+  session.addUserMessage('old context');
+  const localServer = {
+    configuration: () => ({ preset: 'alpha', reasoning: 'auto' }),
+    async selectModel(model) {
+      return { model, reasoning: 'auto', contextLimit: 4_096 };
+    },
+  };
+  const cli = createCli({
+    output,
+    error: capture(),
+    session,
+    localServer,
+    provider: streamingProvider([]),
+  });
+
+  await cli.handleLine('/models beta keep');
+
+  assert.match(output.read(), /Conversation history kept/);
+  assert.deepEqual(session.messages(), [{ role: 'user', content: 'old context' }]);
+});
+
+test('/models lists and selects provider-advertised models', async () => {
+  const output = capture();
+  const session = createSession();
+  session.addUserMessage('old context');
+  let active = 'alpha';
+  const provider = {
+    discoverModels: async () => ({
+      models: ['alpha', 'beta'],
+      source: 'provider',
+    }),
+    configuration: () => ({ model: active }),
+    async selectModel(model) {
+      if (!['alpha', 'beta'].includes(model)) throw new Error('not advertised');
+      active = model;
+      return { model, source: 'provider' };
+    },
+    stream: async function* () {},
+  };
+  const localServer = {
+    managesModels: () => false,
+    configuration: () => ({ status: 'existing' }),
+  };
+  const cli = createCli({
+    output,
+    error: capture(),
+    session,
+    provider,
+    localServer,
+  });
+
+  await cli.handleLine('/models');
+  await cli.handleLine('/models beta keep');
+
+  assert.match(output.read(), /Provider-advertised models/);
+  assert.match(output.read(), /\* alpha/);
+  assert.match(output.read(), /Request model set to beta \(provider\)/);
+  assert.match(output.read(), /Conversation history kept/);
+  assert.equal(active, 'beta');
+  assert.deepEqual(session.messages(), [{ role: 'user', content: 'old context' }]);
+});
+
+test('/models explains external single-model endpoint configuration', async () => {
+  const output = capture();
+  const provider = {
+    discoverModels: async () => ({
+      models: ['fixed-model'],
+      source: 'configured',
+    }),
+    configuration: () => ({ model: 'fixed-model' }),
+    stream: async function* () {},
+  };
+  const cli = createCli({
+    output,
+    error: capture(),
+    provider,
+    localServer: { managesModels: () => false },
+  });
+
+  await cli.handleLine('/models');
+
+  assert.match(output.read(), /Configured single-model endpoint/);
+  assert.match(output.read(), /UGEM_BASE_URL and UGEM_MODEL/);
+});
+
+test('/models reports rejected provider switches without changing history', async () => {
+  const error = capture();
+  const session = createSession();
+  session.addUserMessage('old context');
+  const provider = {
+    configuration: () => ({ model: 'alpha' }),
+    async selectModel() {
+      const cause = new Error('Model "missing" was not advertised by the endpoint');
+      cause.code = 'unsupported_model';
+      throw cause;
+    },
+    stream: async function* () {},
+  };
+  const cli = createCli({
+    output: capture(),
+    error,
+    session,
+    provider,
+    localServer: { managesModels: () => false },
+  });
+
+  await cli.handleLine('/models missing keep');
+
+  assert.match(error.read(), /Could not change model:.*not advertised/);
+  assert.deepEqual(session.messages(), [{ role: 'user', content: 'old context' }]);
 });
 
 test('/reasoning restarts the managed model and clears history on change', async () => {
@@ -324,8 +489,8 @@ test('TTY labels distinguish user and assistant with color-safe accents', async 
   cli.writePrompt();
   await cli.handleLine('question');
 
-  assert.match(output.read(), /\u001b\[34myou › \u001b\[0m/);
-  assert.match(output.read(), /\u001b\[32mμgem ›\u001b\[0m\nanswer/);
+  assert.match(output.read(), /\u001b\[94myou › \u001b\[0m/);
+  assert.match(output.read(), /\u001b\[92mμgem ›\u001b\[0m\nanswer/);
 });
 
 test('Q&A sends only conversation messages, without repository context', async () => {

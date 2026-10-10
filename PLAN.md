@@ -48,15 +48,15 @@
 
 ### T006 — Themes and visual identity
 - [x] Add framed startup/status/metrics panels, bold identity, semantic parameter colors, visual block bars, distinct user/model accents and `NO_COLOR` fallback.
-- [ ] Dark, light and auto modes with one discreet accent, terminal-capability-aware colors.
+- [x] Dark, light and auto modes with coordinated accents and terminal-capability-aware colors.
 - [x] Add `/theme classic|ocean|forest|violet|mono` with `mono` and `NO_COLOR` fallbacks; selection is session-local pending T010 persistence.
-- [ ] Validate contrast, text wrapping and Windows/Linux ANSI behavior where available.
+- [x] Validate dark/light color choices and 40/80-column wrapping on Linux; cover monochrome and Windows Terminal ANSI capability paths in automated tests (real Windows remains T011).
 - **Accept:** all themes readable; no permanent modification of host-terminal theme.
 
 ### T007 — Model selection
 - [x] Auto-start/stop the managed local llama.cpp launcher and add `/models` selection for its presets.
-- [ ] Extend listing/selection to provider-advertised models; offer endpoint configuration for an external single-model server.
-- [ ] On model switch, offer clear vs keep history; managed local switches currently default to a new conversation.
+- [x] Extend listing/selection to provider-advertised request models; offer `UGEM_BASE_URL`/`UGEM_MODEL` configuration for an external single-model server without claiming dynamic loading.
+- [x] On model switch, require clear vs keep when history exists; use a new conversation when none exists.
 - **Accept:** unsupported model switch cannot silently succeed; model ID is truthful.
 
 ### T008 — Reasoning control

@@ -67,6 +67,7 @@ test('local server starts a preset, waits for health, and stops only its child',
     reasoning: 'auto',
     contextLimit: 32_768,
   });
+  assert.equal(server.managesModels(), true);
   assert.equal(calls[0].command, '/apps/llama-server.bash');
   assert.deepEqual(calls[0].args, [
     'gemma4-e4b',
@@ -79,6 +80,7 @@ test('local server starts a preset, waits for health, and stops only its child',
   assert.deepEqual(models, ['gemma4-e4b']);
 
   await server.stop();
+  assert.equal(server.managesModels(), false);
   assert.deepEqual(child.signals, ['SIGTERM']);
 });
 

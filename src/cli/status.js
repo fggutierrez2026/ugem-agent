@@ -1,8 +1,16 @@
 import { formatContextBar, formatContextDetails } from '../metrics/index.js';
 
 const ANSI = Object.freeze({
+  black: '\u001b[30m',
   blue: '\u001b[34m',
   bold: '\u001b[1m',
+  brightBlue: '\u001b[94m',
+  brightCyan: '\u001b[96m',
+  brightGreen: '\u001b[92m',
+  brightMagenta: '\u001b[95m',
+  brightRed: '\u001b[91m',
+  brightWhite: '\u001b[97m',
+  brightYellow: '\u001b[93m',
   cyan: '\u001b[36m',
   dim: '\u001b[2m',
   green: '\u001b[32m',
@@ -13,94 +21,154 @@ const ANSI = Object.freeze({
   yellow: '\u001b[33m',
 });
 
-const THEMES = Object.freeze({
-  classic: Object.freeze({
-    assistant: ANSI.green,
-    border: ANSI.blue,
-    context: ANSI.cyan,
-    identity: ANSI.blue,
-    info: ANSI.blue,
-    label: ANSI.blue,
-    model: ANSI.green,
-    progress: ANSI.green,
-    reasoning: ANSI.yellow,
-    speed: ANSI.green,
-    statsBorder: ANSI.blue,
-    success: ANSI.green,
-    user: ANSI.blue,
-    warning: ANSI.yellow,
-  }),
-  ocean: Object.freeze({
-    assistant: ANSI.blue,
-    border: ANSI.blue,
-    context: ANSI.cyan,
-    identity: ANSI.blue,
-    info: ANSI.cyan,
-    label: ANSI.cyan,
-    model: ANSI.blue,
-    progress: ANSI.cyan,
-    reasoning: ANSI.white,
-    speed: ANSI.blue,
-    statsBorder: ANSI.cyan,
-    success: ANSI.cyan,
-    user: ANSI.cyan,
-    warning: ANSI.yellow,
-  }),
-  forest: Object.freeze({
-    assistant: ANSI.yellow,
-    border: ANSI.green,
-    context: ANSI.green,
-    identity: ANSI.green,
-    info: ANSI.green,
-    label: ANSI.green,
-    model: ANSI.yellow,
-    progress: ANSI.green,
-    reasoning: ANSI.cyan,
-    speed: ANSI.yellow,
-    statsBorder: ANSI.green,
-    success: ANSI.green,
-    user: ANSI.green,
-    warning: ANSI.yellow,
-  }),
-  violet: Object.freeze({
-    assistant: ANSI.magenta,
-    border: ANSI.magenta,
-    context: ANSI.cyan,
-    identity: ANSI.magenta,
-    info: ANSI.cyan,
-    label: ANSI.cyan,
-    model: ANSI.green,
-    progress: ANSI.green,
-    reasoning: ANSI.yellow,
-    speed: ANSI.magenta,
-    statsBorder: ANSI.cyan,
-    success: ANSI.green,
-    user: ANSI.cyan,
-    warning: ANSI.yellow,
-  }),
-  mono: Object.freeze({
-    assistant: ANSI.bold,
-    border: ANSI.dim,
-    context: ANSI.bold,
-    identity: ANSI.bold,
-    info: ANSI.bold,
-    label: ANSI.bold,
-    model: ANSI.bold,
-    progress: ANSI.bold,
-    reasoning: ANSI.bold,
-    speed: ANSI.bold,
-    statsBorder: ANSI.dim,
-    success: ANSI.bold,
-    user: ANSI.bold,
-    warning: ANSI.bold,
-  }),
+function buildThemes(colors) {
+  return Object.freeze({
+    classic: Object.freeze({
+      assistant: colors.green,
+      border: colors.blue,
+      context: colors.cyan,
+      danger: colors.red,
+      identity: colors.blue,
+      info: colors.blue,
+      label: colors.blue,
+      model: colors.green,
+      muted: colors.muted,
+      progress: colors.green,
+      reasoning: colors.yellow,
+      speed: colors.green,
+      statsBorder: colors.blue,
+      success: colors.green,
+      user: colors.blue,
+      warning: colors.yellow,
+    }),
+    ocean: Object.freeze({
+      assistant: colors.blue,
+      border: colors.blue,
+      context: colors.cyan,
+      danger: colors.red,
+      identity: colors.blue,
+      info: colors.cyan,
+      label: colors.cyan,
+      model: colors.blue,
+      muted: colors.muted,
+      progress: colors.cyan,
+      reasoning: colors.neutral,
+      speed: colors.blue,
+      statsBorder: colors.cyan,
+      success: colors.cyan,
+      user: colors.cyan,
+      warning: colors.yellow,
+    }),
+    forest: Object.freeze({
+      assistant: colors.yellow,
+      border: colors.green,
+      context: colors.green,
+      danger: colors.red,
+      identity: colors.green,
+      info: colors.green,
+      label: colors.green,
+      model: colors.yellow,
+      muted: colors.muted,
+      progress: colors.green,
+      reasoning: colors.cyan,
+      speed: colors.yellow,
+      statsBorder: colors.green,
+      success: colors.green,
+      user: colors.green,
+      warning: colors.yellow,
+    }),
+    violet: Object.freeze({
+      assistant: colors.magenta,
+      border: colors.magenta,
+      context: colors.cyan,
+      danger: colors.red,
+      identity: colors.magenta,
+      info: colors.cyan,
+      label: colors.cyan,
+      model: colors.green,
+      muted: colors.muted,
+      progress: colors.green,
+      reasoning: colors.yellow,
+      speed: colors.magenta,
+      statsBorder: colors.cyan,
+      success: colors.green,
+      user: colors.cyan,
+      warning: colors.yellow,
+    }),
+    mono: Object.freeze({
+      assistant: ANSI.bold,
+      border: ANSI.dim,
+      context: ANSI.bold,
+      danger: ANSI.bold,
+      identity: ANSI.bold,
+      info: ANSI.bold,
+      label: ANSI.bold,
+      model: ANSI.bold,
+      muted: ANSI.dim,
+      progress: ANSI.bold,
+      reasoning: ANSI.bold,
+      speed: ANSI.bold,
+      statsBorder: ANSI.dim,
+      success: ANSI.bold,
+      user: ANSI.bold,
+      warning: ANSI.bold,
+    }),
+  });
+}
+
+const DARK_THEMES = buildThemes({
+  blue: ANSI.brightBlue,
+  cyan: ANSI.brightCyan,
+  green: ANSI.brightGreen,
+  magenta: ANSI.brightMagenta,
+  muted: ANSI.dim,
+  neutral: ANSI.brightWhite,
+  red: ANSI.brightRed,
+  yellow: ANSI.brightYellow,
 });
 
-export const THEME_NAMES = Object.freeze(Object.keys(THEMES));
+const LIGHT_THEMES = buildThemes({
+  blue: ANSI.blue,
+  cyan: ANSI.cyan,
+  green: ANSI.green,
+  magenta: ANSI.magenta,
+  muted: `${ANSI.dim}${ANSI.black}`,
+  neutral: ANSI.black,
+  red: ANSI.red,
+  yellow: ANSI.magenta,
+});
 
-export function themePalette(name = 'classic') {
-  return THEMES[name] ?? THEMES.classic;
+export const APPEARANCE_MODES = Object.freeze(['auto', 'dark', 'light']);
+export const THEME_NAMES = Object.freeze(Object.keys(DARK_THEMES));
+
+export function detectTerminalAppearance(env = process.env) {
+  const hint = [
+    env.TERM_BACKGROUND,
+    env.TERMINAL_THEME,
+    env.COLOR_SCHEME,
+    env.GTK_THEME,
+  ].filter(Boolean).join(' ').toLowerCase();
+  if (hint.includes('light')) return 'light';
+  if (hint.includes('dark')) return 'dark';
+
+  const background = String(env.COLORFGBG ?? '').split(';').at(-1);
+  if (/^\d+$/.test(background)) {
+    return Number(background) >= 8 ? 'light' : 'dark';
+  }
+  return 'dark';
 }
+
+export function resolveAppearance(mode = 'auto', env = process.env) {
+  if (mode === 'dark' || mode === 'light') return mode;
+  return detectTerminalAppearance(env);
+}
+
+export function themePalette(name = 'classic', appearance = 'dark') {
+  const themes = appearance === 'light' ? LIGHT_THEMES : DARK_THEMES;
+  return themes[name] ?? themes.classic;
+}
+
+// ANSI styling affects only μgem output; it never changes the host terminal.
 
 function sanitize(value) {
   return String(value ?? 'unknown')
@@ -158,7 +226,7 @@ function contextTone(context, palette) {
   const capacity = context?.budget ?? context?.serverLimit;
   if (!capacity) return ANSI.dim;
   const ratio = (context?.used ?? 0) / capacity;
-  if (ratio >= 0.9) return ANSI.red;
+  if (ratio >= 0.9) return palette.danger;
   if (ratio >= 0.7) return palette.warning;
   return palette.progress;
 }
@@ -205,8 +273,9 @@ export function formatStartupPanel({
   context = {},
   color = false,
   theme = 'classic',
+  appearance = 'dark',
 } = {}) {
-  const palette = themePalette(theme);
+  const palette = themePalette(theme, appearance);
   const availableWidth = Number.isSafeInteger(width) ? width : 80;
   const boxWidth = Math.max(20, Math.min(72, availableWidth));
   const contentWidth = boxWidth - 4;
@@ -231,7 +300,7 @@ export function formatStartupPanel({
         color,
         contentWidth,
         labelStyle: palette.label,
-        valueStyle: reasoning === 'off' ? ANSI.dim : palette.reasoning,
+        valueStyle: reasoning === 'off' ? palette.muted : palette.reasoning,
       }),
       dataLine('context', formatContextDetails(context), {
         color,
@@ -266,7 +335,7 @@ function metricLine(line, color, palette) {
     mode: palette.reasoning,
     response: palette.model,
     speed: palette.speed,
-    context: percent >= 90 ? ANSI.red : palette.context,
+    context: percent >= 90 ? palette.danger : palette.context,
   };
   return {
     plain: `${prefix}${value}`,
@@ -278,8 +347,9 @@ export function formatMetricsPanel(footer, {
   width = 80,
   color = false,
   theme = 'classic',
+  appearance = 'dark',
 } = {}) {
-  const palette = themePalette(theme);
+  const palette = themePalette(theme, appearance);
   const lines = String(footer)
     .split('\n')
     .map((line) => line.trimEnd())
@@ -294,8 +364,9 @@ export function formatStatusPanel(message, {
   title = 'status',
   tone = 'info',
   theme = 'classic',
+  appearance = 'dark',
 } = {}) {
-  const palette = themePalette(theme);
+  const palette = themePalette(theme, appearance);
   const tones = {
     info: palette.info,
     success: palette.success,

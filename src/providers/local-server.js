@@ -255,6 +255,7 @@ export function createLocalServer({
     selectModel,
     selectReasoning,
     stop,
+    managesModels: () => owned,
     configuration: () => Object.freeze({
       enabled: env.UGEM_AUTO_START !== '0',
       launcher,
