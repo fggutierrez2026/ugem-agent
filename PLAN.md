@@ -81,11 +81,11 @@
 - **Accept:** preferences survive restart; corrupt config recovers safely and reports issue.
 
 ### T011 — End-to-end validation and v0.1 release
-- [ ] Run integration tests against mocked OpenAI-compatible SSE provider.
-- [ ] Manually test against a real `llama.cpp` server and document actual model/build used.
-- [ ] Verify theme, Markdown, math, token/context metrics, model selection and reasoning degradation.
-- [ ] Test Linux and Windows (or clearly document unverified platform); publish README/getting-started and release notes.
-- [ ] Verify Q&A is tool-free and cannot edit repository files.
+- [x] Run integration tests against mocked OpenAI-compatible SSE provider.
+- [x] Manually test against a real `llama.cpp` server and document actual model/build used.
+- [x] Verify theme, Markdown, math, token/context metrics, model selection and reasoning degradation.
+- [x] Test Linux and Windows (or clearly document unverified platform); publish README/getting-started and release notes.
+- [x] Verify Q&A is tool-free and cannot edit repository files.
 - **Accept:** runnable v0.1 release with evidence and disclosed limitations; no `/plan`, `/build`, `/debug` implementation implied.
 
 ## Deferred roadmap (not executable yet)

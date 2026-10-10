@@ -6,6 +6,12 @@
   "bin": {
     "ugem": "./src/index.js"
   },
+  "files": [
+    "src",
+    "docs",
+    "README.md",
+    "RELEASE_NOTES.md"
+  ],
   "engines": {
     "node": ">=20"
   },

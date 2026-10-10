@@ -16,6 +16,9 @@
 | `ui-design.md` | Distinctive lightweight TUI, Markdown/math, settings, metrics |
 | `adr.md` | Architectural decisions and tradeoffs |
 | `verification.md` | Test and acceptance strategy |
+| `release-verification-v0.1.md` | v0.1 automated/manual evidence and disclosed limitations |
+| `../README.md` | Installation, getting started and user command guide |
+| `../RELEASE_NOTES.md` | Version highlights, verification summary and exclusions |
 | `../AGENTS.md` | Instructions for coding agents |
 | `../MEMORY.md` | Current operational memory |
 | `../PLAN.md` | Actionable checklist **only up to v0.1** |
