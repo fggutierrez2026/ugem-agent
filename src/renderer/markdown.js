@@ -12,7 +12,24 @@ const ANSI = {
   italic: '\x1b[3m',
   dim: '\x1b[2m',
   code: '\x1b[36m',
+  blue: '\x1b[34m',
+  green: '\x1b[32m',
+  magenta: '\x1b[35m',
+  red: '\x1b[31m',
+  white: '\x1b[37m',
+  yellow: '\x1b[33m',
 };
+
+const CODE_COLORS = Object.freeze({
+  auto: ANSI.green,
+  blue: ANSI.blue,
+  cyan: ANSI.code,
+  green: ANSI.green,
+  magenta: ANSI.magenta,
+  red: ANSI.red,
+  white: ANSI.white,
+  yellow: ANSI.yellow,
+});
 
 export function sanitizeTerminalText(value) {
   return String(value).replace(ANSI_PATTERN, '').replace(CONTROL_PATTERN, '');
@@ -172,10 +189,17 @@ function renderTable(rows, width, color) {
   return output;
 }
 
-export function createMarkdownStream({ write, width, color = false }) {
+export function createMarkdownStream({
+  write,
+  width,
+  color = false,
+  codeColor = 'green',
+}) {
   let buffer = '';
   let pendingLine;
   let codeBlock = false;
+  let codeLanguage = '';
+  let codeLines = [];
   let tableRows;
   let mathLines;
 
@@ -213,15 +237,61 @@ export function createMarkdownStream({ write, width, color = false }) {
     emitWrapped(renderMath(expression), '  ', '  ', ANSI.dim, { inline: false });
   }
 
+  function splitCodeLine(line, widthLimit) {
+    if (line === '') return [''];
+    const lines = [];
+    let current = '';
+    let used = 0;
+    for (const character of line) {
+      const size = characterWidth(character);
+      if (current && used + size > widthLimit) {
+        lines.push(current);
+        current = '';
+        used = 0;
+      }
+      current += character;
+      used += size;
+    }
+    if (current) lines.push(current);
+    return lines;
+  }
+
+  function emitCodeBlock() {
+    const boxWidth = terminalWidth();
+    const contentWidth = Math.max(1, boxWidth - 4);
+    const language = sanitizeTerminalText(codeLanguage).trim();
+    const title = language ? `─ ${sliceWidth(language, boxWidth - 7)} ` : '─';
+    const top = `┌${title}${'─'.repeat(Math.max(0, boxWidth - title.length - 2))}┐`;
+    const borderStyle = ANSI.dim;
+    const contentStyle = CODE_COLORS[codeColor] ?? CODE_COLORS.green;
+    write(`${styled(top, borderStyle, color)}\n`);
+    const visualLines = codeLines.flatMap((line) => splitCodeLine(line, contentWidth));
+    for (const line of visualLines.length > 0 ? visualLines : ['']) {
+      const padding = ' '.repeat(Math.max(0, contentWidth - visibleWidth(line)));
+      write(
+        `${styled('│', borderStyle, color)} `
+        + `${styled(line + padding, contentStyle, color)} `
+        + `${styled('│', borderStyle, color)}\n`,
+      );
+    }
+    write(`${styled(`└${'─'.repeat(boxWidth - 2)}┘`, borderStyle, color)}\n`);
+    codeLines = [];
+    codeLanguage = '';
+  }
+
   function processLine(line) {
-    const fence = line.match(/^\s*```/);
+    const fence = line.match(/^\s*```\s*([^\s`]*)/);
     if (codeBlock) {
-      if (fence) codeBlock = false;
-      else write(`${styled(line, ANSI.code, color)}\n`);
+      if (fence) {
+        codeBlock = false;
+        emitCodeBlock();
+      } else codeLines.push(line);
       return;
     }
     if (fence) {
       codeBlock = true;
+      codeLanguage = fence[1] ?? '';
+      codeLines = [];
       return;
     }
 
@@ -322,6 +392,10 @@ export function createMarkdownStream({ write, width, color = false }) {
       if (mathLines) {
         write(`$$${mathLines.join('\n')}\n`);
         mathLines = undefined;
+      }
+      if (codeBlock) {
+        emitCodeBlock();
+        codeBlock = false;
       }
     },
   };

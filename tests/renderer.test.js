@@ -28,7 +28,12 @@ $$\\frac{a}{b} \\leq \\sqrt{x}$$
 
 Unsupported $\\begin{matrix}a&b\\end{matrix}$.`;
 
-function render(source, { columns = 80, color = false, chunks } = {}) {
+function render(source, {
+  columns = 80,
+  color = false,
+  codeColor = 'green',
+  chunks,
+} = {}) {
   const output = {
     columns,
     text: '',
@@ -36,7 +41,7 @@ function render(source, { columns = 80, color = false, chunks } = {}) {
       this.text += value;
     },
   };
-  const renderer = createRenderer({ output, color });
+  const renderer = createRenderer({ output, color, codeColor });
   if (chunks) {
     for (const chunk of chunks) renderer.writeChunk(chunk);
     renderer.endAnswer();
@@ -104,8 +109,20 @@ test('color mode styles Markdown while hiding its delimiters and fences', () => 
   assert.match(result, /\x1b\[1mbold\x1b\[0m/);
   assert.match(result, /\x1b\[3mitalic\x1b\[0m/);
   assert.match(result, /\x1b\[36mcode\x1b\[0m/);
-  assert.match(result, /\x1b\[36mlet x = 1;\x1b\[0m/);
+  assert.match(result, /\x1b\[32mlet x = 1;\s+\x1b\[0m/);
+  assert.match(result, /┌─ js /);
   assert.doesNotMatch(result, /\*\*|```/);
+});
+
+test('fenced code color is selectable without changing the raw code', () => {
+  const result = render('```python\nprint("hello")\n```', {
+    color: true,
+    codeColor: 'yellow',
+  });
+
+  assert.match(result, /┌─ python /);
+  assert.match(result, /\x1b\[33mprint\("hello"\)\s+\x1b\[0m/);
+  assert.doesNotMatch(result, /```/);
 });
 
 test('all non-code lines respect a narrow terminal width', () => {

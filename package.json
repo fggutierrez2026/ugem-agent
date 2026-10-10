@@ -12,7 +12,7 @@
   "scripts": {
     "check": "npm run lint && npm run format:check && npm test",
     "format:check": "node scripts/style-check.js",
-    "lint": "node --check src/index.js && node --check src/cli/app.js && node --check src/providers/index.js && node --check src/providers/sse.js && node --check src/session/index.js && node --check src/renderer/index.js && node --check src/renderer/markdown.js && node --check src/renderer/math.js && node --check src/metrics/index.js && node --check src/settings/index.js && node --check scripts/style-check.js",
+    "lint": "node --check src/index.js && node --check src/cli/app.js && node --check src/cli/status.js && node --check src/providers/index.js && node --check src/providers/local-server.js && node --check src/providers/sse.js && node --check src/session/index.js && node --check src/renderer/index.js && node --check src/renderer/markdown.js && node --check src/renderer/math.js && node --check src/metrics/index.js && node --check src/settings/index.js && node --check scripts/style-check.js",
     "test": "node --test"
   },
   "license": "MIT"

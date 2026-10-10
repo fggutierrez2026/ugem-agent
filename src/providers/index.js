@@ -1,6 +1,6 @@
 import { parseSse } from './sse.js';
 
-const DEFAULT_BASE_URL = 'http://127.0.0.1:8080';
+const DEFAULT_BASE_URL = 'http://127.0.0.1:8081';
 const DEFAULT_MODEL = 'local-model';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const UNSUPPORTED_DISCOVERY_STATUS = new Set([404, 405, 501]);
@@ -59,12 +59,24 @@ function parseJson(text, endpoint, credential) {
   }
 }
 
+function streamMetadata(payload) {
+  const contextLimit = payload?.generation_settings?.n_ctx ?? payload?.n_ctx;
+  const metadata = {
+    usage: payload?.usage,
+    timings: payload?.timings,
+    contextLimit,
+    tokensPredicted: payload?.tokens_predicted,
+    tokensEvaluated: payload?.tokens_evaluated,
+  };
+  return Object.values(metadata).some((value) => value != null) ? metadata : null;
+}
+
 export function createProvider(options = {}) {
   const env = options.env ?? process.env;
   const baseUrl = normalizeBaseUrl(
     options.baseUrl ?? env.UGEM_BASE_URL ?? DEFAULT_BASE_URL,
   );
-  const model = options.model ?? env.UGEM_MODEL ?? DEFAULT_MODEL;
+  let model = options.model ?? env.UGEM_MODEL ?? DEFAULT_MODEL;
   const timeoutMs = positiveInteger(
     options.timeoutMs ?? env.UGEM_REQUEST_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS,
     'UGEM_REQUEST_TIMEOUT_MS',
@@ -83,10 +95,10 @@ export function createProvider(options = {}) {
     });
   }
 
-  async function request(path, init) {
+  async function request(path, init, { requestTimeoutMs = timeoutMs } = {}) {
     const endpoint = `${baseUrl}${path}`;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
     timer.unref?.();
 
     let response;
@@ -96,7 +108,7 @@ export function createProvider(options = {}) {
       text = await response.text();
     } catch (cause) {
       if (controller.signal.aborted) {
-        throw new ProviderError(`Model endpoint timed out after ${timeoutMs} ms`, {
+        throw new ProviderError(`Model endpoint timed out after ${requestTimeoutMs} ms`, {
           code: 'timeout',
           cause,
         });
@@ -135,6 +147,69 @@ export function createProvider(options = {}) {
   }
 
   return {
+    async health(requestTimeoutMs = 500) {
+      try {
+        await request('/health', {
+          method: 'GET',
+          headers: credential ? { authorization: `Bearer ${credential}` } : {},
+        }, { requestTimeoutMs });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    setModel(modelId) {
+      if (typeof modelId !== 'string' || modelId.trim() === '') {
+        throw new ProviderError('Model ID must not be empty', {
+          code: 'invalid_configuration',
+        });
+      }
+      model = modelId;
+    },
+
+    async runtimeInfo() {
+      const fallback = Object.freeze({
+        model,
+        modelSource: 'configured',
+        status: 'unknown',
+        contextLimit: null,
+        reasoning: 'unknown',
+      });
+      try {
+        const query = `model=${encodeURIComponent(model)}&autoload=false`;
+        const payload = await request(`/props?${query}`, {
+          method: 'GET',
+          headers: credential ? { authorization: `Bearer ${credential}` } : {},
+        }, { requestTimeoutMs: Math.min(timeoutMs, 1_000) });
+        const contextLimit = payload?.default_generation_settings?.n_ctx;
+        const params = payload?.default_generation_settings?.params;
+        const configuredReasoning = params?.reasoning
+          ?? params?.chat_template_kwargs?.enable_thinking;
+        let reasoning = 'unknown';
+        if (configuredReasoning === true || configuredReasoning === 'true') {
+          reasoning = 'on';
+        } else if (configuredReasoning === false || configuredReasoning === 'false') {
+          reasoning = 'off';
+        } else if (['on', 'off', 'auto'].includes(configuredReasoning)) {
+          reasoning = configuredReasoning;
+        }
+        return Object.freeze({
+          model: typeof payload?.model_alias === 'string' && payload.model_alias
+            ? payload.model_alias
+            : model,
+          modelSource: payload?.model_alias ? 'provider' : 'configured',
+          status: payload?.is_sleeping === true ? 'sleeping' : 'ready',
+          contextLimit: Number.isSafeInteger(contextLimit) && contextLimit > 0
+            ? contextLimit
+            : null,
+          reasoning,
+        });
+      } catch {
+        return fallback;
+      }
+    },
+
     async complete(messages) {
       const payload = await request('/v1/chat/completions', {
         method: 'POST',
@@ -151,7 +226,7 @@ export function createProvider(options = {}) {
       return content;
     },
 
-    async *stream(messages, { signal } = {}) {
+    async *stream(messages, { signal, onMetadata } = {}) {
       const endpoint = `${baseUrl}/v1/chat/completions`;
       const controller = new AbortController();
       let timedOut = false;
@@ -171,7 +246,12 @@ export function createProvider(options = {}) {
           response = await fetchImpl(endpoint, {
             method: 'POST',
             headers: headers(),
-            body: JSON.stringify({ model, messages, stream: true }),
+            body: JSON.stringify({
+              model,
+              messages,
+              stream: true,
+              stream_options: { include_usage: true },
+            }),
             signal: controller.signal,
           });
         } catch (cause) {
@@ -240,6 +320,8 @@ export function createProvider(options = {}) {
             }
 
             const payload = parseJson(data, endpoint, credential);
+            const metadata = streamMetadata(payload);
+            if (metadata && typeof onMetadata === 'function') onMetadata(metadata);
             const delta = payload?.choices?.[0]?.delta?.content;
             if (delta != null && typeof delta !== 'string') {
               throw new ProviderError('Model endpoint returned an invalid stream chunk', {

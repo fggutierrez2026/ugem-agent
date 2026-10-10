@@ -33,38 +33,42 @@
 
 ### T004 — Rich terminal renderer
 - [x] Style headings, emphasis, quotes, lists, links, tables and inline code as rendered terminal content, not raw Markdown delimiters.
-- [x] Render fenced code without fences; preserve indentation, optional syntax highlighting and safe ANSI handling.
+- [x] Render fenced code in a responsive titled box without fences; preserve indentation/raw history, selectable text color and safe ANSI handling.
 - [x] Render common inline/display math as legible Unicode; define truthful fallback for unsupported LaTeX.
 - [x] Support streaming Markdown with buffering for incomplete blocks, wrapping and terminal resize.
 - [x] Add snapshot/golden tests with split streams, nested lists, tables, LaTeX and narrow terminals.
 - **Accept:** `# Heading` displays as styled heading; no raw fences for valid blocks; no lost/duplicated text; math never silently changes meaning.
 
 ### T005 — Metrics and context telemetry
-- [ ] Capture latency, TTFT, completion count and speed; prefer provider token timings when available.
-- [ ] Distinguish prompt/output tokens, wall-clock throughput vs generation-only throughput, and source (reported/estimated/unavailable).
-- [ ] Display current used/budget/server limit if known; avoid claiming exact tokenizer counts from estimates.
-- [ ] Add `/stats` and optional concise per-answer footer.
+- [x] Capture latency, TTFT, completion count and speed; prefer provider token timings when available.
+- [x] Distinguish prompt/output tokens, wall-clock throughput vs generation-only throughput, and source (reported/estimated/unavailable).
+- [x] Display current used/budget/server limit if known; avoid claiming exact tokenizer counts from estimates.
+- [x] Add `/stats` and optional concise per-answer footer.
 - **Accept:** metric calculations tested with synthetic streams; unknown measurements show N/A, never invented values.
 
 ### T006 — Themes and visual identity
+- [x] Add framed startup/status/metrics panels, bold identity, semantic parameter colors, visual block bars, distinct user/model accents and `NO_COLOR` fallback.
 - [ ] Dark, light and auto modes with one discreet accent, terminal-capability-aware colors.
-- [ ] Add `/theme` and graceful fallback for monochrome/no-color terminals.
+- [x] Add `/theme classic|ocean|forest|violet|mono` with `mono` and `NO_COLOR` fallbacks; selection is session-local pending T010 persistence.
 - [ ] Validate contrast, text wrapping and Windows/Linux ANSI behavior where available.
 - **Accept:** all themes readable; no permanent modification of host-terminal theme.
 
 ### T007 — Model selection
-- [ ] Add `/model` listing from provider discovery and active-model display.
-- [ ] Support selection only when advertised/supported; offer endpoint configuration if single-model server.
-- [ ] On model switch, offer clear vs keep history; default new conversation for unbiased comparison.
+- [x] Auto-start/stop the managed local llama.cpp launcher and add `/models` selection for its presets.
+- [ ] Extend listing/selection to provider-advertised models; offer endpoint configuration for an external single-model server.
+- [ ] On model switch, offer clear vs keep history; managed local switches currently default to a new conversation.
 - **Accept:** unsupported model switch cannot silently succeed; model ID is truthful.
 
 ### T008 — Reasoning control
-- [ ] Add `/reasoning auto|on|off` and capability-aware interpretation for backend/model.
+- [x] Add `/reasoning auto|on|off` for the managed local llama.cpp server; restart the owned process and clear history when it changes.
+- [ ] Extend capability-aware reasoning interpretation to other backends/models.
 - [ ] Keep reasoning-generation control distinct from hiding/displaying reasoning content.
 - [ ] Report unsupported/unknown control honestly rather than claiming OFF.
 - **Accept:** tests cover supported, unsupported, unknown capability and no-leak final-answer formatting.
 
 ### T009 — Context budget management
+- [x] Render a proportional context bar when the server limit is known, with explicit `N/A` fallback.
+- [x] Warn once when estimated retained context reaches 90%; reset the warning with `/clear` or a model/reasoning change.
 - [ ] Add `/context` viewer and set session budget within confirmed server limits.
 - [ ] Reserve output tokens; prevent silent truncation; warn on overflow and offer `/clear`.
 - [ ] Explain server `--ctx-size` may require restart/reload; no claim of dynamically changing server context.

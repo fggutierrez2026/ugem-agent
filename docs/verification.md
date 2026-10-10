@@ -12,7 +12,7 @@
 - Model listing/reasoning/context controls fail honestly where backend unsupported.
 - Metrics distinguish provider reporting from estimates and never invent values.
 - `/Q&A` cannot invoke tools, execute commands or mutate project files.
-- `/clear`, `/settings`, `/theme`, `/model`, `/context`, `/reasoning`, `/stats` behavior covered.
+- `/clear`, `/settings`, `/theme`, `/model`, `/context`, `/reasoning`, `/code-color`, `/stats` behavior covered.
 - No secrets displayed; sensible handling of cancellation, server crash and oversized history.
 
 ## Future `/plan` and `/build` verification principles

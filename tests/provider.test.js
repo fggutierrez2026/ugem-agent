@@ -165,6 +165,29 @@ test('model discovery falls back for a single-model server', async () => {
   });
 });
 
+test('runtime inspection reads optional llama.cpp properties truthfully', async () => {
+  await withServer((request, response) => {
+    assert.equal(request.url, '/props?model=gemma-test&autoload=false');
+    response.end(JSON.stringify({
+      model_alias: 'gemma-loaded',
+      is_sleeping: false,
+      default_generation_settings: {
+        n_ctx: 16_384,
+        params: { chat_template_kwargs: { enable_thinking: true } },
+      },
+    }));
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl, model: 'gemma-test' });
+    assert.deepEqual(await provider.runtimeInfo(), {
+      model: 'gemma-loaded',
+      modelSource: 'provider',
+      status: 'ready',
+      contextLimit: 16_384,
+      reasoning: 'on',
+    });
+  });
+});
+
 test('request timeout aborts an unresponsive server', async () => {
   await withServer(() => {}, async (baseUrl) => {
     const provider = createProvider({ baseUrl, timeoutMs: 20 });
@@ -175,12 +198,25 @@ test('request timeout aborts an unresponsive server', async () => {
   });
 });
 
+test('health detection and internal model updates support local lifecycle', async () => {
+  await withServer((request, response) => {
+    assert.equal(request.url, '/health');
+    response.end(JSON.stringify({ status: 'ok' }));
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl, model: 'before' });
+    assert.equal(await provider.health(), true);
+    provider.setModel('after');
+    assert.equal(provider.configuration().model, 'after');
+  });
+});
+
 test('stream parses incremental chat chunks through [DONE]', async () => {
   await withServer(async (request, response) => {
     assert.deepEqual(JSON.parse(await readBody(request)), {
       model: 'stream-model',
       messages: [{ role: 'user', content: 'hello' }],
       stream: true,
+      stream_options: { include_usage: true },
     });
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.write(
@@ -198,6 +234,34 @@ test('stream parses incremental chat chunks through [DONE]', async () => {
       chunks.push(chunk);
     }
     assert.deepEqual(chunks, ['Hola ', '🌎']);
+  });
+});
+
+test('stream exposes reported usage, timings, and server context metadata', async () => {
+  await withServer((request, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n');
+    response.write('data: {"choices":[],"usage":{"prompt_tokens":3,'
+      + '"completion_tokens":1},"timings":{"predicted_per_second":12},'
+      + '"generation_settings":{"n_ctx":4096}}\n\n');
+    response.end('data: [DONE]\n\n');
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl });
+    const metadata = [];
+    const chunks = [];
+    for await (const chunk of provider.stream([], {
+      onMetadata: (value) => metadata.push(value),
+    })) {
+      chunks.push(chunk);
+    }
+    assert.deepEqual(chunks, ['ok']);
+    assert.deepEqual(metadata, [{
+      usage: { prompt_tokens: 3, completion_tokens: 1 },
+      timings: { predicted_per_second: 12 },
+      contextLimit: 4_096,
+      tokensPredicted: undefined,
+      tokensEvaluated: undefined,
+    }]);
   });
 });
 

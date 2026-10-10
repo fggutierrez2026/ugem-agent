@@ -14,7 +14,9 @@ Alpha │ A deliberately long table value
       │ that must wrap on narrow
       │ terminals
 
-  const value = 42;
+┌─ js ─────────────────────────────────┐
+│   const value = 42;                  │
+└──────────────────────────────────────┘
 
 Inline E = mc².
 

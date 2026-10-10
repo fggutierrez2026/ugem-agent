@@ -18,6 +18,7 @@ Future: /plan  → Planning → Research → Design & Tasks ─┐
 ## v0.1 components
 - **CLI & Router:** parse local commands deterministically; default free text goes to Q&A. `/Q&A` never enables tools.
 - **Provider Adapter:** JSON request/response + SSE streaming; capability discovery; compatible with OpenAI-like endpoints, default llama.cpp.
+- **Local Server Lifecycle:** optionally reuse the adjacent preset launcher, probe health, own one child process and shut down only that child; model/reasoning changes restart only the owned process, while external endpoints remain unmanaged.
 - **Conversation:** message history, clear, cancellation, budget check, keep/cancel failed turns deterministically.
 - **Renderer:** streaming Markdown state, code blocks, math fallbacks, ANSI themes, terminal resize and no-color fallback.
 - **Metrics:** usage from server when available, otherwise explicitly labeled estimates; distinguish TTFT, wall time, generation throughput.
