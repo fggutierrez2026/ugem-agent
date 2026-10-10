@@ -34,6 +34,7 @@ export function terminalSupportsColor(output, env = process.env) {
 const HELP = `Commands:
   /Q&A [question]  Enter Q&A mode or ask a question
   /clear           Clear conversation history
+  /settings        Show persistent settings and shortcuts
   /models [id] [options]    List/select; reasoning level and clear|keep
   /reasoning [setting]      auto|on|off|low (1K)|medium (2K)|high (4K)
   /context [tokens|auto]    Show/set the validated session context budget
@@ -51,6 +52,7 @@ export function createCli({
   output = process.stdout,
   error = process.stderr,
   env = process.env,
+  settings = null,
   provider = createProvider(),
   session = createSession(),
   renderer = createRenderer({ output }),
@@ -99,6 +101,17 @@ export function createCli({
       appearance: resolvedAppearance,
       ...options,
     }));
+  }
+
+  async function persistPreferences(values) {
+    if (typeof settings?.update !== 'function') return;
+    try {
+      await settings.update(values);
+    } catch (cause) {
+      error.write(
+        `Setting changed for this session but could not be saved: ${cause.message}\n`,
+      );
+    }
   }
 
   function resetConversation() {
@@ -252,6 +265,28 @@ export function createCli({
     if (!managedModelSelection()) return currentReasoningMode();
     const level = localServer.configuration?.().reasoningLevel ?? 'high';
     return `${level}/${currentReasoningMode()}`;
+  }
+
+  function settingsSummary() {
+    const managed = managedModelSelection();
+    const model = managed
+      ? localServer.configuration?.().preset ?? 'unknown'
+      : provider.configuration?.().model ?? 'unknown';
+    const context = metrics.contextStatus();
+    const stored = settings?.configuration?.();
+    return [
+      `Appearance: ${selectedTheme} · ${selectedThemeMode} → ${resolvedAppearance}.`,
+      `Code color: ${renderer.configuration?.().codeColor ?? 'unknown'}.`,
+      `Model: ${model}${managed ? ' (managed local)' : ' (provider request)'}.`,
+      `Reasoning: ${currentReasoningLabel()}.`,
+      `Context budget: ${context.budget == null
+        ? 'auto'
+        : context.budget.toLocaleString('en-US') + ' tokens'}.`,
+      `Metrics footer: ${metrics.footerEnabled() ? 'on' : 'off'}.`,
+      'Streaming: on (SSE).',
+      `Preferences file: ${stored?.path ?? 'unavailable; session only'}.`,
+      'Change with /theme, /code-color, /models, /reasoning, /context or /stats.',
+    ].join('\n');
   }
 
   function reasoningSelection(value) {
@@ -433,6 +468,16 @@ export function createCli({
       return true;
     }
 
+    const settingsCommand = line.match(/^\/settings(?:\s+(.+))?$/i);
+    if (settingsCommand) {
+      if (settingsCommand[1]) {
+        error.write('Usage: /settings\n');
+      } else {
+        writeStatus(settingsSummary(), { title: 'settings' });
+      }
+      return true;
+    }
+
     const context = line.match(/^\/context(?:\s+(.+))?$/i);
     if (context) {
       const requested = context[1]?.trim().toLowerCase();
@@ -444,6 +489,7 @@ export function createCli({
       if (requested === 'auto') {
         metrics.clearContextBudget();
         contextWarningShown = false;
+        await persistPreferences({ contextBudget: null });
         writeStatus(contextSummary('Session context budget returned to auto.'), {
           title: 'context',
           tone: 'success',
@@ -459,6 +505,7 @@ export function createCli({
           reasoningBudget: currentReasoningBudget(),
         });
         contextWarningShown = false;
+        await persistPreferences({ contextBudget: Number(requested) });
         writeStatus(contextSummary(
           `Session context budget set to ${Number(requested).toLocaleString('en-US')} tokens.`,
         ), { title: 'context', tone: 'success' });
@@ -541,6 +588,12 @@ export function createCli({
             onStatus: () => {},
           });
           runtimeHint = selected;
+          const saved = { model: requested };
+          if (options.reasoning != null) saved.reasoning = options.reasoning;
+          if (options.reasoningLabel && options.reasoningLabel !== 'off') {
+            saved.reasoningLevel = options.reasoningLabel;
+          }
+          await persistPreferences(saved);
           if (changes || budgetChanges) {
             const historyMessage = applyHistoryChoice(options.history);
             metrics.setContextLimits({ server: selected.contextLimit });
@@ -589,6 +642,7 @@ export function createCli({
           contextLimit: null,
           reasoning: 'unknown',
         };
+        await persistPreferences({ model: selected.model });
         metrics.setContextLimits({ server: null });
         const historyMessage = applyHistoryChoice(options.history);
         if (typeof provider.runtimeInfo === 'function') {
@@ -651,6 +705,9 @@ export function createCli({
             onStatus: () => {},
           });
           runtimeHint = selected;
+          const saved = { reasoning: selection.mode };
+          if (selection.label !== 'off') saved.reasoningLevel = selection.label;
+          await persistPreferences(saved);
           const modeChanged = selected.reasoning !== previous.reasoning;
           const budgetChanged = selected.reasoning !== 'off'
             && selected.reasoningBudget !== previous.reasoningBudget;
@@ -708,6 +765,7 @@ export function createCli({
           reasoning: selected.mode,
           reasoningControl: selected.capability,
         };
+        await persistPreferences({ reasoning: selection.mode });
         if (selected.mode !== previous) {
           resetConversation();
           writeStatus(
@@ -770,6 +828,10 @@ export function createCli({
       selectedTheme = nextTheme;
       selectedThemeMode = nextMode;
       resolvedAppearance = resolveAppearance(selectedThemeMode, env);
+      const saved = {};
+      if (sawTheme) saved.theme = selectedTheme;
+      if (sawMode) saved.themeMode = selectedThemeMode;
+      await persistPreferences(saved);
       writeStatus(
         `Theme changed to ${selectedTheme} · mode ${selectedThemeMode}`
         + ` → ${resolvedAppearance}.`, {
@@ -800,6 +862,7 @@ export function createCli({
         return true;
       }
       renderer.setCodeColor(requested);
+      await persistPreferences({ codeColor: requested });
       writeStatus(`Code color changed to ${requested}.`, {
         title: 'code',
         tone: 'success',
@@ -812,6 +875,7 @@ export function createCli({
       const option = stats[1]?.toLowerCase();
       if (option === 'on' || option === 'off') {
         metrics.setFooterEnabled(option === 'on');
+        await persistPreferences({ stats: option === 'on' });
         writeStatus(`Per-answer metrics footer ${option}.`, { title: 'stats' });
       } else if (option) {
         error.write('Usage: /stats [on|off]\n');
@@ -854,8 +918,24 @@ export function createCli({
   async function run() {
     try {
       runtimeHint = await localServer.ensureRunning();
+      const previousBudget = metrics.contextStatus().budget;
       if (runtimeHint.contextLimit != null) {
         metrics.setContextLimits({ server: runtimeHint.contextLimit });
+      }
+      const settingsNotices = settings?.configuration?.().notices ?? [];
+      if (settingsNotices.length > 0) {
+        writeStatus(settingsNotices.join('\n'), {
+          title: 'settings warning',
+          tone: 'warning',
+        });
+      }
+      if (previousBudget != null && metrics.contextStatus().budget == null) {
+        await persistPreferences({ contextBudget: null });
+        writeStatus(
+          `Saved context budget ${previousBudget.toLocaleString('en-US')} is not `
+          + 'compatible with the active server limit; context returned to auto.',
+          { title: 'settings warning', tone: 'warning' },
+        );
       }
       if (output.isTTY) await writeStartup();
       readline = createInterface({

@@ -1,7 +1,7 @@
 # Verification & Quality Strategy
 
 ## v0.1 MVP test levels
-1. **Unit:** command parser, session history/clear, settings validation, token/latency calculation, theme/background selection, terminal color capability, partial UTF-8/SSE parser.
+1. **Unit:** command parser, session history/clear, settings paths/schema/migration/atomic persistence, token/latency calculation, theme/background selection, terminal color capability, partial UTF-8/SSE parser.
 2. **Renderer golden tests:** Markdown headings, emphasis, nested lists, tables, links, mixed code/math; arbitrary streaming chunk boundaries; widths 40/80/120 columns; no-color terminal.
 3. **Provider contract tests:** local mock HTTP/SSE server, error status, dropped connection, `[DONE]`, usage present/missing, advertised model selection, rejected unknown IDs, model list missing, supported/unsupported/unknown reasoning control, hidden reasoning chunks, separate `reasoning_budget_tokens`, combined reserved `max_tokens`, finish reasons and unsupported context fields.
 4. **Manual integration:** running llama.cpp on accessible model; compare metrics to provider output where available, document assumptions.
@@ -13,6 +13,7 @@
 - Context budgets cannot exceed a confirmed server limit; estimated input plus reasoning and final-output reserves must fit, overflow does not contact the provider or alter history, and output-limit finishes are explicit.
 - Reasoning tests keep generation control separate from response visibility and ensure `reasoning_content` never enters final-answer rendering/history.
 - Metrics distinguish provider reporting from estimates, separate retained context from all-token generation peak and never invent values.
+- Settings persist only allowlisted explicit choices, environment overrides win, secrets are discarded, and missing/corrupt/future schemas recover with a visible explanation.
 - `/Q&A` cannot invoke tools, execute commands or mutate project files.
 - `/clear`, `/settings`, `/theme`, `/model`, `/context`, `/reasoning`, `/code-color`, `/stats` behavior covered.
 - No secrets displayed; sensible handling of cancellation, server crash and oversized history.

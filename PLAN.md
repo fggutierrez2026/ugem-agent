@@ -75,9 +75,9 @@
 - **Accept:** limits validated, overflow is explicit, estimated usage labeled.
 
 ### T010 — Settings persistence and UI
-- [ ] Add `/settings` compact menu, `/help`, default Q&A mode and documented shortcuts.
-- [ ] Store preferences in OS-appropriate config location; separate from conversation/project data.
-- [ ] Validate schema, defaults, backward-compatible versioning and secure handling of secrets.
+- [x] Add `/settings` compact menu, `/help`, default Q&A mode and documented shortcuts.
+- [x] Store preferences in OS-appropriate config location; separate from conversation/project data.
+- [x] Validate schema, defaults, backward-compatible versioning and secure handling of secrets.
 - **Accept:** preferences survive restart; corrupt config recovers safely and reports issue.
 
 ### T011 — End-to-end validation and v0.1 release

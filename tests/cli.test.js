@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { Writable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import test from 'node:test';
 import { createCli, HELP, terminalSupportsColor } from '../src/cli/app.js';
 import { createSession } from '../src/session/index.js';
@@ -158,6 +158,99 @@ test('/clear also removes metrics from the previous conversation', async () => {
   assert.equal(metrics.latest(), null);
   assert.equal(metrics.contextStatus().used, 0);
   assert.match(output.read(), /Metrics: no completed answer yet/);
+});
+
+test('/settings shows the compact menu and shortcuts persist explicit choices', async () => {
+  const output = capture();
+  const updates = [];
+  let codeColor = 'green';
+  const settings = {
+    configuration: () => ({ path: '/home/test/.config/ugem/config.json' }),
+    async update(values) {
+      updates.push(values);
+    },
+  };
+  const cli = createCli({
+    output,
+    error: capture(),
+    settings,
+    provider: {
+      configuration: () => ({ model: 'test-model' }),
+      reasoningConfiguration: () => ({ mode: 'auto' }),
+      stream: async function* () {},
+    },
+    localServer: { managesModels: () => false },
+    renderer: {
+      configuration: () => ({ codeColor }),
+      setCodeColor(value) {
+        codeColor = value;
+      },
+    },
+  });
+
+  await cli.handleLine('/settings');
+  await cli.handleLine('/theme light forest');
+  await cli.handleLine('/code-color yellow');
+  await cli.handleLine('/stats off');
+  await cli.handleLine('/context auto');
+
+  assert.match(output.read(), /Appearance: classic · auto → dark/);
+  assert.match(output.read(), /Model: test-model \(provider request\)/);
+  assert.match(output.read(), /Streaming: on \(SSE\)/);
+  assert.match(output.read(), /Preferences file: \/home\/test\/\.config\/ugem/);
+  assert.deepEqual(updates, [
+    { theme: 'forest', themeMode: 'light' },
+    { codeColor: 'yellow' },
+    { stats: false },
+    { contextBudget: null },
+  ]);
+});
+
+test('a persistence failure keeps the session change and reports it', async () => {
+  const error = capture();
+  const metrics = createMetrics();
+  const cli = createCli({
+    output: capture(),
+    error,
+    metrics,
+    settings: {
+      async update() {
+        throw new Error('read-only config');
+      },
+    },
+  });
+
+  await cli.handleLine('/stats off');
+
+  assert.equal(metrics.footerEnabled(), false);
+  assert.match(error.read(), /changed for this session.*read-only config/);
+});
+
+test('startup reports settings recovery notices without blocking Q&A', async () => {
+  const output = capture();
+  let stopped = false;
+  const cli = createCli({
+    input: Readable.from(['/exit\n']),
+    output,
+    error: capture(),
+    settings: {
+      configuration: () => ({
+        notices: ['Invalid settings file; defaults are active.'],
+      }),
+    },
+    localServer: {
+      ensureRunning: async () => ({ status: 'unmanaged', contextLimit: null }),
+      async stop() {
+        stopped = true;
+      },
+    },
+  });
+
+  await cli.run();
+
+  assert.match(output.read(), /settings warning/);
+  assert.match(output.read(), /Invalid settings file; defaults are active/);
+  assert.equal(stopped, true);
 });
 
 test('/stats shows the latest metrics and toggles the optional footer', async () => {
