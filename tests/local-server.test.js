@@ -65,6 +65,8 @@ test('local server starts a preset, waits for health, and stops only its child',
     status: 'started',
     model: 'gemma4-e4b',
     reasoning: 'auto',
+    reasoningBudget: 4_096,
+    reasoningLevel: 'high',
     contextLimit: 32_768,
   });
   assert.equal(server.managesModels(), true);
@@ -74,6 +76,7 @@ test('local server starts a preset, waits for health, and stops only its child',
     '--host', '127.0.0.1',
     '--port', '8081',
     '--reasoning', 'auto',
+    '--reasoning-budget', '4096',
     '--no-webui',
   ]);
   assert.equal(calls[0].options.env.UGEM_API_KEY, undefined);
@@ -142,6 +145,8 @@ test('model selection replaces an owned server and updates the provider', async 
     status: 'started',
     model: 'qwen3.5-4b',
     reasoning: 'off',
+    reasoningBudget: 4_096,
+    reasoningLevel: 'high',
     contextLimit: 65_536,
   });
   assert.deepEqual(children[0].signals, ['SIGTERM']);
@@ -181,12 +186,48 @@ test('reasoning selection restarts the owned server with the new mode', async ()
     status: 'started',
     model: 'gemma4-e4b',
     reasoning: 'off',
+    reasoningBudget: 4_096,
+    reasoningLevel: 'high',
     contextLimit: 32_768,
   });
   assert.deepEqual(children[0].signals, ['SIGTERM']);
-  assert.deepEqual(calls[1].args.slice(-3), [
-    '--reasoning', 'off', '--no-webui',
+  assert.deepEqual(calls[1].args.slice(-5), [
+    '--reasoning', 'off', '--reasoning-budget', '4096', '--no-webui',
   ]);
 
+  await server.stop();
+});
+
+test('reasoning budget levels change per request without restarting the model', async () => {
+  const health = [false, true, true];
+  const child = new FakeChild();
+  let spawns = 0;
+  const server = createLocalServer({
+    provider: {
+      health: async () => health.shift() ?? true,
+      configuration: () => ({ baseUrl: 'http://127.0.0.1:8081' }),
+      setModel: () => {},
+    },
+    env: { PATH: '/usr/bin', UGEM_REASONING: 'on' },
+    launcher: '/apps/llama-server.bash',
+    presetsFile: '/apps/presets.ini',
+    exists: () => true,
+    readFileImpl: async () => PRESETS,
+    spawnImpl() {
+      spawns += 1;
+      return child;
+    },
+    wait: async () => {},
+  });
+
+  await server.ensureRunning();
+  const selected = await server.selectReasoning('on', {
+    reasoningBudget: 2_048,
+  });
+
+  assert.equal(spawns, 1);
+  assert.equal(selected.reasoningLevel, 'medium');
+  assert.equal(selected.reasoningBudget, 2_048);
+  assert.equal(server.configuration().reasoningLevel, 'medium');
   await server.stop();
 });

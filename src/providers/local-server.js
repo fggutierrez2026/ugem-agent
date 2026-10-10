@@ -13,6 +13,12 @@ const DEFAULT_LAUNCHER = resolve(
   'llama-server.bash',
 );
 const DEFAULT_PRESET = 'gemma4-e4b';
+const DEFAULT_REASONING_BUDGET = 4_096;
+const REASONING_BUDGET_LEVELS = Object.freeze({
+  low: 1_024,
+  medium: 2_048,
+  high: 4_096,
+});
 
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
@@ -21,6 +27,11 @@ function positiveInteger(value, fallback) {
 
 function reasoningMode(value, fallback = null) {
   return ['on', 'off', 'auto'].includes(value) ? value : fallback;
+}
+
+function reasoningLevel(budget) {
+  return Object.entries(REASONING_BUDGET_LEVELS)
+    .find(([, tokens]) => tokens === budget)?.[0] ?? 'custom';
 }
 
 function localEndpoint(configuration) {
@@ -61,12 +72,18 @@ export function createLocalServer({
   startupTimeoutMs = positiveInteger(env.UGEM_LLAMA_START_TIMEOUT_MS, 120_000),
   pollIntervalMs = 250,
 } = {}) {
+  const initialReasoningBudget = positiveInteger(
+    env.UGEM_REASONING_BUDGET_TOKENS,
+    REASONING_BUDGET_LEVELS[env.UGEM_REASONING_LEVEL]
+      ?? DEFAULT_REASONING_BUDGET,
+  );
   let child;
   let owned = false;
   let outputTail = '';
   let spawnError;
   let activePreset = preset;
   let activeReasoning = null;
+  let activeReasoningBudget = initialReasoningBudget;
   let lastStatus = 'unknown';
 
   async function presets() {
@@ -106,7 +123,12 @@ export function createLocalServer({
     }
     if (await provider.health()) {
       lastStatus = 'existing';
-      return { started: false, status: 'existing' };
+      return {
+        started: false,
+        status: 'existing',
+        reasoningBudget: owned ? activeReasoningBudget : null,
+        reasoningLevel: owned ? reasoningLevel(activeReasoningBudget) : null,
+      };
     }
 
     const endpoint = localEndpoint(provider.configuration());
@@ -140,6 +162,7 @@ export function createLocalServer({
       '--host', endpoint.host,
       '--port', String(endpoint.port),
       '--reasoning', selectedReasoning,
+      '--reasoning-budget', String(activeReasoningBudget),
       '--no-webui',
     ], {
       env: childEnv,
@@ -176,6 +199,8 @@ export function createLocalServer({
           status: 'started',
           model: activePreset,
           reasoning: selectedReasoning,
+          reasoningBudget: activeReasoningBudget,
+          reasoningLevel: reasoningLevel(activeReasoningBudget),
           contextLimit: selected?.contextLimit ?? null,
         };
       }
@@ -206,6 +231,7 @@ export function createLocalServer({
 
   async function selectModel(modelId, {
     reasoning,
+    reasoningBudget,
     onStatus = () => {},
   } = {}) {
     const available = await presets();
@@ -214,17 +240,24 @@ export function createLocalServer({
       throw new Error(`Unknown local model preset: ${modelId}`);
     }
     const selectedReasoning = reasoningMode(reasoning, selected.reasoning);
+    const selectedReasoningBudget = positiveInteger(
+      reasoningBudget,
+      activeReasoningBudget,
+    );
     if (
       modelId === activePreset
       && selectedReasoning === activeReasoning
       && await provider.health()
     ) {
+      activeReasoningBudget = selectedReasoningBudget;
       provider.setModel?.(modelId);
       return {
         started: false,
         status: lastStatus,
         model: modelId,
         reasoning: selectedReasoning,
+        reasoningBudget: activeReasoningBudget,
+        reasoningLevel: reasoningLevel(activeReasoningBudget),
         contextLimit: selected.contextLimit,
       };
     }
@@ -237,6 +270,7 @@ export function createLocalServer({
     await stop();
     activePreset = modelId;
     activeReasoning = selectedReasoning;
+    activeReasoningBudget = selectedReasoningBudget;
     provider.setModel?.(modelId);
     return ensureRunning({ onStatus });
   }
@@ -261,6 +295,8 @@ export function createLocalServer({
       launcher,
       preset: activePreset,
       reasoning: activeReasoning ?? reasoningMode(env.UGEM_REASONING, 'unknown'),
+      reasoningBudget: owned ? activeReasoningBudget : null,
+      reasoningLevel: owned ? reasoningLevel(activeReasoningBudget) : null,
       presetsFile,
       status: lastStatus,
     }),

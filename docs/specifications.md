@@ -20,8 +20,8 @@ Minimalist terminal assistant for local/open-weight LLMs; eventual coding workfl
 | QA-006 | Metrics | prompt/output tokens if available, speed, latency, TTFT, context; reported vs estimate shown |
 | QA-007 | Theme selection | dark/light/auto, persisted, never changes host terminal theme |
 | QA-008 | Model selection | list actual provider models, no fake dynamic switching; clarify history on switch |
-| QA-009 | Reasoning settings | auto/on/off *where supported*; generation control distinct from visibility |
-| QA-010 | Context setting | session budget ≤ known server max, warn before overflow, reserve generation output |
+| QA-009 | Reasoning settings | auto/on/off where supported; managed low/medium/high budgets; generation control distinct from visibility |
+| QA-010 | Context setting | session budget ≤ known server max, warn before overflow, reserve reasoning and final output |
 | QA-011 | Settings menu and persistence | OS-local config, no plaintext secrets, robust invalid-config recovery |
 | QA-012 | Streaming renderer robustness | fragmented SSE/Unicode/Markdown correctly reconstructed |
 

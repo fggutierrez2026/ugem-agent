@@ -141,6 +141,25 @@ test('/clear removes history but retains the active Q&A mode', async () => {
   assert.deepEqual(calls[1], [{ role: 'user', content: 'second' }]);
 });
 
+test('/clear also removes metrics from the previous conversation', async () => {
+  const output = capture();
+  const metrics = createMetrics({ now: clock(0, 100, 1_100) });
+  const cli = createCli({
+    output,
+    error: capture(),
+    metrics,
+    provider: streamingProvider([['answer']]),
+  });
+
+  await cli.handleLine('first');
+  await cli.handleLine('/clear');
+  await cli.handleLine('/stats');
+
+  assert.equal(metrics.latest(), null);
+  assert.equal(metrics.contextStatus().used, 0);
+  assert.match(output.read(), /Metrics: no completed answer yet/);
+});
+
 test('/stats shows the latest metrics and toggles the optional footer', async () => {
   const output = capture();
   const error = capture();
@@ -249,11 +268,36 @@ test('/context shows limits and sets only a validated session budget', async () 
   await cli.handleLine('/context 16384');
 
   assert.match(output.read(), /Confirmed server limit: 8,192 tokens/);
-  assert.match(output.read(), /Reserved output: 1,024 tokens per answer/);
+  assert.match(output.read(), /Reserved final output: 2,048 tokens/);
+  assert.match(output.read(), /Reasoning budget: none/);
   assert.match(output.read(), /Session context budget set to 4,096 tokens/);
   assert.match(output.read(), /does not change llama-server --ctx-size/);
   assert.equal(metrics.contextStatus().budget, 4_096);
   assert.match(error.read(), /exceeds the confirmed server limit 8,192/);
+});
+
+test('/context includes the managed reasoning level in the completion reserve', async () => {
+  const output = capture();
+  const cli = createCli({
+    output,
+    error: capture(),
+    metrics: createMetrics({ serverLimit: 32_768 }),
+    localServer: {
+      managesModels: () => true,
+      configuration: () => ({
+        preset: 'qwen3.5-4b',
+        reasoning: 'on',
+        reasoningBudget: 4_096,
+        reasoningLevel: 'high',
+      }),
+    },
+  });
+
+  await cli.handleLine('/context');
+
+  assert.match(output.read(), /Reasoning budget: 4,096 tokens \(high\/on\)/);
+  assert.match(output.read(), /Total completion reserve: 8,192 tokens/);
+  assert.match(output.read(), /Estimated input room after reserve: 24,576 tokens/);
 });
 
 test('/context refuses an unvalidated budget when the server limit is unknown', async () => {
@@ -305,12 +349,12 @@ test('answers receive an output reserve and provider truncation is explicit', as
     output,
     error: capture(),
     provider,
-    metrics: createMetrics({ serverLimit: 4_096, footer: false }),
+    metrics: createMetrics({ serverLimit: 32_768, footer: false }),
   });
 
   await cli.handleLine('question');
 
-  assert.equal(receivedMaxTokens, 1_024);
+  assert.equal(receivedMaxTokens, 4_096);
   assert.match(output.read(), /output limit/);
   assert.match(output.read(), /incomplete; this was reported by the provider/);
 });
@@ -527,10 +571,103 @@ test('/reasoning restarts the managed model and clears history on change', async
 
   assert.match(
     output.read(),
-    /Reasoning generation request changed to off\. Conversation cleared\./,
+    /Reasoning changed to off\. Conversation cleared\./,
   );
-  assert.match(output.read(), /Reasoning content remains hidden/);
+  assert.match(output.read(), /Reasoning content[\s\S]*remains hidden/);
   assert.deepEqual(session.messages(), []);
+});
+
+test('/reasoning selects low, medium, and high token budgets', async () => {
+  const output = capture();
+  const session = createSession();
+  session.addUserMessage('retained');
+  let reasoning = 'on';
+  let reasoningBudget = 4_096;
+  let reasoningLevel = 'high';
+  const selections = [];
+  const localServer = {
+    managesModels: () => true,
+    configuration: () => ({
+      preset: 'qwen3.5-4b',
+      reasoning,
+      reasoningBudget,
+      reasoningLevel,
+    }),
+    async selectReasoning(mode, options) {
+      reasoning = mode;
+      reasoningBudget = options.reasoningBudget;
+      reasoningLevel = reasoningBudget === 1_024 ? 'low'
+        : reasoningBudget === 2_048 ? 'medium' : 'high';
+      selections.push({ mode, reasoningBudget });
+      return {
+        model: 'qwen3.5-4b',
+        status: 'existing',
+        reasoning,
+        reasoningBudget,
+        reasoningLevel,
+        contextLimit: 32_768,
+      };
+    },
+  };
+  const cli = createCli({
+    output,
+    error: capture(),
+    session,
+    localServer,
+    provider: streamingProvider([]),
+  });
+
+  await cli.handleLine('/reasoning low');
+  await cli.handleLine('/reasoning medium');
+  await cli.handleLine('/reasoning high');
+
+  assert.deepEqual(selections, [
+    { mode: 'on', reasoningBudget: 1_024 },
+    { mode: 'on', reasoningBudget: 2_048 },
+    { mode: 'on', reasoningBudget: 4_096 },
+  ]);
+  assert.deepEqual(session.messages(), [{ role: 'user', content: 'retained' }]);
+  assert.match(output.read(), /Reasoning level changed to low \(1,024 tokens\)/);
+  assert.match(output.read(), /Reasoning level changed to medium \(2,048 tokens\)/);
+  assert.match(output.read(), /Reasoning level changed to high \(4,096 tokens\)/);
+});
+
+test('managed reasoning has separate reasoning/final limits and reported peak use', async () => {
+  const output = capture();
+  let requestOptions;
+  const provider = {
+    async *stream(messages, options) {
+      requestOptions = options;
+      options.onMetadata({
+        usage: { prompt_tokens: 100, completion_tokens: 3_000 },
+      });
+      yield 'done';
+    },
+  };
+  const localServer = {
+    managesModels: () => true,
+    configuration: () => ({
+      preset: 'qwen3.5-4b',
+      reasoning: 'on',
+      reasoningBudget: 2_048,
+      reasoningLevel: 'medium',
+    }),
+  };
+  const cli = createCli({
+    output,
+    error: capture(),
+    provider,
+    localServer,
+    metrics: createMetrics({ serverLimit: 32_768 }),
+  });
+
+  await cli.handleLine('question');
+
+  assert.equal(requestOptions.reasoningBudget, 2_048);
+  assert.equal(requestOptions.maxTokens, 6_144);
+  assert.match(output.read(), /peak\s+\[███/);
+  assert.match(output.read(), /3,100 used/);
+  assert.match(output.read(), /2,048 reasoning \+ 4,096 final tok/);
 });
 
 test('/reasoning reports generation and display as separate settings', async () => {
@@ -618,6 +755,27 @@ test('/reasoning preserves history when external capability is unknown', async (
   assert.match(error.read(), /no verifiable reasoning control/);
   assert.match(error.read(), /Current request remains auto/);
   assert.deepEqual(session.messages(), [{ role: 'user', content: 'old context' }]);
+});
+
+test('/reasoning token levels fail honestly for an external endpoint', async () => {
+  const error = capture();
+  let selections = 0;
+  const cli = createCli({
+    output: capture(),
+    error,
+    provider: {
+      async selectReasoning() {
+        selections += 1;
+      },
+      stream: async function* () {},
+    },
+    localServer: { managesModels: () => false },
+  });
+
+  await cli.handleLine('/reasoning medium');
+
+  assert.equal(selections, 0);
+  assert.match(error.read(), /levels require the μgem-managed llama\.cpp server/);
 });
 
 test('startup panel reports runtime status and context without inventing reasoning', async () => {

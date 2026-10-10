@@ -8,7 +8,7 @@ Distinctive but restrained: terminal-native typography, a small coordinated pale
 ┌──────────────────────────────────────────────────────────────┐
 │ μgem agent  /  Q&A                                          │
 │ model      gemma4-e4b (provider, ready)                      │
-│ reasoning  auto                                              │
+│ reasoning  auto/high (4,096 tok)                             │
 │ context    1,284 used · 15,100 available · 16,384 total      │
 │            [██░░░░░░░░░░░░░░░░░░░░░░] 7.8%                  │
 └─────────────────────────────────────────────────────────────┘
@@ -30,6 +30,9 @@ you › Explain attention.
 │ speed      28.6 tok/s (reported) · 6.5 s wall                │
 │ context    [██░░░░░░░░░░░░░░░░░░░░░░░░░░] 7.8%              │
 │            1,284 used · 15,100 available · 16,384 total      │
+│ peak       [███░░░░░░░░░░░░░░░░░░░░░░░░░] 10.2%             │
+│            1,671 used · 14,713 available · 16,384 total      │
+│ budget     4,096 reasoning + 4,096 final tok                 │
 └──────────────────────────────────────────────────────────────┘
 you ›
 ```
@@ -42,9 +45,9 @@ Labels and numbers are illustrative; real UI must not fabricate runtime metrics.
 - For streaming: accumulate partial SSE bytes, parse token stream, preserve incomplete Markdown/code/math blocks until stable. Avoid repainting whole terminal per token. No loss/duplication on arbitrary chunk splits.
 
 ## Metrics footer
-Prefer a compact multiline block containing reasoning mode, output tokens, generation tok/s, wall time, context bar and explicit used/available/total values. The per-answer block is enabled by default and `/stats off` hides it for the current session. Clearly distinguish backend reported, measured estimates and unavailable; context occupancy uses retained visible conversation content and remains labeled estimated, while the server limit may be unknown. Warn once at 90% usage and reset that warning when the session is cleared. `/context` additionally shows the validated session/server limits, reserved output and estimated input room. Overflow and provider-reported output truncation use framed warnings and offer `/clear`; history is never silently removed to make a request fit.
+Prefer a compact multiline block containing reasoning mode/level, output tokens, generation tok/s, wall time, retained context, generation peak and the split reasoning/final completion budget. The per-answer block is enabled by default and `/stats off` hides it for the current session. Clearly distinguish backend reported, measured estimates and unavailable. Retained occupancy estimates the visible content kept for the next turn; generation peak uses reported prompt plus all completion tokens, including hidden reasoning, when the provider supplies usage. The server limit may be unknown. Warn once when retained usage reaches 90% and reset that warning when the session is cleared. `/context` additionally shows the validated session/server limits, both reserves and estimated input room. Overflow and provider-reported output truncation use framed warnings and offer `/clear`; history is never silently removed to make a request fit.
 
-The reasoning row describes the generation request, not whether a hidden trace is displayed. `/reasoning` separately reports requested mode, verified control capability and the final-answer-only display policy. `auto` means provider/model default; unsupported or undiscoverable controls remain explicitly `unsupported` or `unknown`.
+The reasoning row describes the generation request, not whether a hidden trace is displayed. `/reasoning` separately reports requested mode, managed-server token level, verified control capability and the final-answer-only display policy. Managed levels are `low` (1,024), `medium` (2,048) and `high` (4,096 reasoning tokens). `auto` means provider/model default; unsupported or undiscoverable controls remain explicitly `unsupported` or `unknown`.
 
 Status changes use compact framed panels, but model startup and generation do not show static pseudo-progress panels. Context bars use proportional `█`/`░` blocks and switch to warning/error colors as occupancy increases. The selected palette coordinates prompts, identity, borders, labels, values and metrics; all ANSI styling is removed under `NO_COLOR`.
 

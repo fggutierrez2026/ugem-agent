@@ -320,7 +320,7 @@ export function formatStartupPanel({
 
 function metricLine(line, color, palette) {
   const trimmed = line.trim();
-  const match = trimmed.match(/^(mode|response|speed|context)\s+(.*)$/);
+  const match = trimmed.match(/^(mode|response|speed|context|peak|budget)\s+(.*)$/);
   if (!match) {
     const prefix = /^\s/.test(line) ? ' '.repeat(11) : '';
     return {
@@ -336,6 +336,8 @@ function metricLine(line, color, palette) {
     response: palette.model,
     speed: palette.speed,
     context: percent >= 90 ? palette.danger : palette.context,
+    peak: percent >= 90 ? palette.danger : palette.warning,
+    budget: palette.reasoning,
   };
   return {
     plain: `${prefix}${value}`,

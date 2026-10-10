@@ -60,7 +60,7 @@
 - **Accept:** unsupported model switch cannot silently succeed; model ID is truthful.
 
 ### T008 — Reasoning control
-- [x] Add `/reasoning auto|on|off` for the managed local llama.cpp server; restart the owned process and clear history when it changes.
+- [x] Add `/reasoning auto|on|off` plus managed `low|medium|high` budgets (1K/2K/4K); restart and clear only when the mode changes.
 - [x] Extend capability-aware reasoning interpretation to external llama.cpp-compatible model templates using non-inference `/props` and `/apply-template` probes.
 - [x] Keep reasoning-generation control distinct from final-answer-only display; never append `reasoning_content` to rendered output or history.
 - [x] Report supported, unsupported and unknown control honestly; treat `auto` as the backend default rather than claiming OFF.
@@ -70,7 +70,7 @@
 - [x] Render a proportional context bar when the server limit is known, with explicit `N/A` fallback.
 - [x] Warn once when estimated retained context reaches 90%; reset the warning with `/clear` or a model/reasoning change.
 - [x] Add `/context` viewer and set session budget within confirmed server limits.
-- [x] Reserve output tokens; prevent silent truncation; warn on overflow and offer `/clear`.
+- [x] Reserve reasoning and final-output tokens separately; prevent silent truncation; warn on overflow and offer `/clear`.
 - [x] Explain server `--ctx-size` may require restart/reload; no claim of dynamically changing server context.
 - **Accept:** limits validated, overflow is explicit, estimated usage labeled.
 

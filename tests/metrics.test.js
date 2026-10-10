@@ -44,6 +44,12 @@ test('reported provider usage and timings take precedence over estimates', () =>
     serverLimit: 8_192,
     source: 'estimated',
   });
+  assert.deepEqual(result.generationContext, {
+    used: 25,
+    budget: 4_096,
+    serverLimit: 8_192,
+    source: 'reported',
+  });
 });
 
 test('missing usage produces clearly labeled token and speed estimates', () => {
@@ -111,7 +117,10 @@ test('the concise footer is optional and retains metric provenance', () => {
       + '  response   1 output tok (estimated)\n'
       + '  speed      1.0 tok/s (estimated) · 1.1 s wall\n'
       + '  context    [░░░░░░░░░░░░░░░░░░░░░░░░░░░░] limit N/A\n'
-      + '             2 used · available N/A (estimated)\n',
+      + '             2 used · available N/A (estimated)\n'
+      + '  peak       [░░░░░░░░░░░░░░░░░░░░░░░░░░░░] limit N/A\n'
+      + '             2 used · available N/A (estimated)\n'
+      + '  budget     0 reasoning + 4,096 final tok\n',
   );
   metrics.setFooterEnabled(false);
   assert.equal(metrics.footerEnabled(), false);
@@ -154,16 +163,18 @@ test('context bars show known progress and remain honest without a limit', () =>
   );
 });
 
-test('clearing a session resets current context without deleting last metrics', () => {
+test('clearing a session resets current context and its last metrics', () => {
   const metrics = createMetrics({ now: clock(0, 100, 1_100), serverLimit: 8_192 });
   const measurement = metrics.begin([{ role: 'user', content: '1234' }]);
   measurement.addChunk('1234');
-  const latest = measurement.finish();
+  measurement.finish();
 
   assert.equal(metrics.contextStatus().used, 2);
+  assert.notEqual(metrics.latest(), null);
   metrics.resetContext();
   assert.equal(metrics.contextStatus().used, 0);
-  assert.equal(metrics.latest(), latest);
+  assert.equal(metrics.latest(), null);
+  assert.match(metrics.formatStats(), /no completed answer yet/);
 });
 
 test('session context budgets are validated against confirmed server limits', () => {
@@ -194,6 +205,8 @@ test('context assessment reserves output and rejects estimated overflow', () => 
     allowed: true,
     used: 5,
     capacity: 16,
+    outputReserve: 4,
+    reasoningReserve: 0,
     reserve: 4,
     required: 9,
     available: 7,
@@ -205,6 +218,46 @@ test('context assessment reserves output and rejects estimated overflow', () => 
   ]);
   assert.equal(overflow.allowed, false);
   assert.equal(overflow.required, 17);
+});
+
+test('large context windows reserve enough room for reasoning and final output', () => {
+  const metrics = createMetrics({ serverLimit: 32_768 });
+  const assessment = metrics.assessContext([], { reasoningBudget: 4_096 });
+
+  assert.equal(metrics.contextStatus().outputReserve, 4_096);
+  assert.deepEqual(assessment, {
+    allowed: true,
+    used: 0,
+    capacity: 32_768,
+    outputReserve: 4_096,
+    reasoningReserve: 4_096,
+    reserve: 8_192,
+    required: 8_192,
+    available: 24_576,
+    source: 'estimated',
+  });
+});
+
+test('generation peak includes reported hidden reasoning while retained context does not', () => {
+  const metrics = createMetrics({
+    now: clock(0, 100, 1_100),
+    serverLimit: 32_768,
+  });
+  const measurement = metrics.begin([
+    { role: 'user', content: 'question' },
+  ], { outputReserve: 4_096, reasoningBudget: 4_096 });
+  measurement.addChunk('done');
+  measurement.addProviderMetadata({
+    usage: { prompt_tokens: 20, completion_tokens: 1_024 },
+  });
+  const result = measurement.finish();
+
+  assert.equal(result.context.used, 21);
+  assert.equal(result.generationContext.used, 1_044);
+  assert.equal(result.generationContext.source, 'reported');
+  assert.match(metrics.formatFooter(), /peak\s+\[█/);
+  assert.match(metrics.formatFooter(), /1,044 used/);
+  assert.match(metrics.formatFooter(), /4,096 reasoning \+ 4,096 final tok/);
 });
 
 test('a smaller server limit clears an incompatible session budget', () => {

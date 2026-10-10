@@ -19,6 +19,11 @@ import {
 } from './status.js';
 
 const ANSI_RESET = '\u001b[0m';
+const REASONING_LEVELS = Object.freeze({
+  low: 1_024,
+  medium: 2_048,
+  high: 4_096,
+});
 
 export function terminalSupportsColor(output, env = process.env) {
   if (!output?.isTTY || env.NO_COLOR != null || env.TERM === 'dumb') return false;
@@ -29,8 +34,8 @@ export function terminalSupportsColor(output, env = process.env) {
 const HELP = `Commands:
   /Q&A [question]  Enter Q&A mode or ask a question
   /clear           Clear conversation history
-  /models [id] [options]    List/select; options: reasoning, clear|keep
-  /reasoning [mode]         Show/change reasoning for the active model
+  /models [id] [options]    List/select; reasoning level and clear|keep
+  /reasoning [setting]      auto|on|off|low (1K)|medium (2K)|high (4K)
   /context [tokens|auto]    Show/set the validated session context budget
   /theme [mode] [palette]   mode: auto|dark|light
   /code-color [color]       Show/change fenced-code color
@@ -128,9 +133,11 @@ export function createCli({
   function contextSummary(prefix) {
     const status = metrics.contextStatus();
     const capacity = status.budget ?? status.serverLimit;
+    const reasoningBudget = currentReasoningBudget();
+    const completionReserve = status.outputReserve + reasoningBudget;
     const inputRoom = capacity == null
       ? null
-      : Math.max(0, capacity - status.used - status.outputReserve);
+      : Math.max(0, capacity - status.used - completionReserve);
     return [
       ...(prefix ? [prefix] : []),
       `Usage: ${formatContextBar(status)} (${status.source})`,
@@ -141,7 +148,12 @@ export function createCli({
       `Confirmed server limit: ${status.serverLimit == null
         ? 'N/A'
         : status.serverLimit.toLocaleString('en-US') + ' tokens'}.`,
-      `Reserved output: ${status.outputReserve.toLocaleString('en-US')} tokens per answer.`,
+      `Reserved final output: ${status.outputReserve.toLocaleString('en-US')} tokens.`,
+      `Reasoning budget: ${reasoningBudget > 0
+        ? reasoningBudget.toLocaleString('en-US') + ' tokens ('
+          + currentReasoningLabel() + ')'
+        : 'none'}.`,
+      `Total completion reserve: ${completionReserve.toLocaleString('en-US')} tokens.`,
       `Estimated input room after reserve: ${inputRoom == null
         ? 'N/A'
         : inputRoom.toLocaleString('en-US') + ' tokens'}.`,
@@ -160,18 +172,21 @@ export function createCli({
 
   function parseModelOptions(args) {
     let reasoning;
+    let reasoningBudget;
+    let reasoningLabel;
     let history;
     for (const option of args) {
       const normalized = option.toLowerCase();
-      if (['auto', 'on', 'off'].includes(normalized) && reasoning == null) {
-        reasoning = normalized;
+      const selection = reasoningSelection(normalized);
+      if (selection && reasoning == null) {
+        ({ mode: reasoning, budget: reasoningBudget, label: reasoningLabel } = selection);
       } else if (['clear', 'keep'].includes(normalized) && history == null) {
         history = normalized;
       } else {
         return null;
       }
     }
-    return { reasoning, history };
+    return { reasoning, reasoningBudget, reasoningLabel, history };
   }
 
   function historyChoiceRequired(modelId, history) {
@@ -206,8 +221,13 @@ export function createCli({
     } else {
       control = 'unknown; the endpoint exposes no verifiable capability';
     }
+    const budgetLine = managed && info.mode !== 'off'
+      ? [`Budget: ${info.level ?? 'high'} · `
+        + `${(info.budget ?? 4_096).toLocaleString('en-US')} reasoning tokens.`]
+      : [];
     return [
       `Generation request: ${info.mode ?? 'unknown'}.`,
+      ...budgetLine,
       `Control: ${control}.`,
       'Reasoning content: hidden; display policy does not disable generation.',
     ].join('\n');
@@ -219,6 +239,33 @@ export function createCli({
       : provider.reasoningConfiguration?.().mode
         ?? runtimeHint.reasoning
         ?? 'unknown';
+  }
+
+  function currentReasoningBudget() {
+    if (currentReasoningMode() === 'off' || !managedModelSelection()) return 0;
+    const budget = localServer.configuration?.().reasoningBudget;
+    return Number.isSafeInteger(budget) && budget > 0 ? budget : 0;
+  }
+
+  function currentReasoningLabel() {
+    if (currentReasoningMode() === 'off') return 'off';
+    if (!managedModelSelection()) return currentReasoningMode();
+    const level = localServer.configuration?.().reasoningLevel ?? 'high';
+    return `${level}/${currentReasoningMode()}`;
+  }
+
+  function reasoningSelection(value) {
+    if (Object.hasOwn(REASONING_LEVELS, value)) {
+      return { mode: 'on', budget: REASONING_LEVELS[value], label: value };
+    }
+    if (value === 'on') {
+      return { mode: 'on', budget: REASONING_LEVELS.high, label: 'high' };
+    }
+    if (value === 'auto') {
+      return { mode: 'auto', budget: REASONING_LEVELS.high, label: 'high' };
+    }
+    if (value === 'off') return { mode: 'off', budget: 0, label: 'off' };
+    return null;
   }
 
   async function writeStartup() {
@@ -254,9 +301,15 @@ export function createCli({
     if (runtime.contextLimit != null) {
       metrics.setContextLimits({ server: runtime.contextLimit });
     }
+    const reasoningDisplay = runtime.reasoningBudget > 0
+      && runtime.reasoning !== 'off'
+      ? `${runtime.reasoning}/${runtime.reasoningLevel ?? 'custom'} `
+        + `(${runtime.reasoningBudget.toLocaleString('en-US')} tok)`
+      : runtime.reasoning;
     output.write(formatStartupPanel({
       width: output.columns ?? 80,
       ...runtime,
+      reasoning: reasoningDisplay,
       context: metrics.contextStatus(),
       color,
       theme: selectedTheme,
@@ -269,14 +322,18 @@ export function createCli({
       ...session.messages(),
       { role: 'user', content: question },
     ];
-    const assessment = metrics.assessContext(prospectiveMessages);
+    const reasoningBudget = currentReasoningBudget();
+    const assessment = metrics.assessContext(prospectiveMessages, {
+      reasoningBudget,
+    });
     if (!assessment.allowed) {
       const overflow = assessment.required - assessment.capacity;
       writeStatus(
         `Request not sent: the conversation needs about `
         + `${assessment.required.toLocaleString('en-US')} tokens `
         + `(${assessment.used.toLocaleString('en-US')} estimated input + `
-        + `${assessment.reserve.toLocaleString('en-US')} reserved output), `
+        + `${assessment.outputReserve.toLocaleString('en-US')} final output + `
+        + `${assessment.reasoningReserve.toLocaleString('en-US')} reasoning), `
         + `which exceeds the ${assessment.capacity.toLocaleString('en-US')}-token `
         + `budget by ${overflow.toLocaleString('en-US')}. Use /clear to start `
         + 'a new conversation or /context to inspect the limits.',
@@ -290,11 +347,15 @@ export function createCli({
     activeController = new AbortController();
     try {
       session.addUserMessage(question);
-      measurement = metrics.begin(session.messages());
+      measurement = metrics.begin(session.messages(), {
+        outputReserve: assessment.outputReserve,
+        reasoningBudget: assessment.reasoningReserve,
+      });
       writeAssistantLabel();
       for await (const chunk of provider.stream(session.messages(), {
         signal: activeController.signal,
         maxTokens: assessment.reserve,
+        reasoningBudget: assessment.reasoningReserve || undefined,
         onMetadata: (metadata) => measurement.addProviderMetadata(metadata),
       })) {
         answer += chunk;
@@ -308,7 +369,7 @@ export function createCli({
       if (metrics.footerEnabled()) {
         const footer = metrics.formatFooter(record, {
           width: output.columns ?? 80,
-          reasoning: currentReasoningMode(),
+          reasoning: currentReasoningLabel(),
         });
         output.write('\n');
         output.write(formatMetricsPanel(footer, {
@@ -320,8 +381,9 @@ export function createCli({
       }
       if (record.finishReason === 'length') {
         writeStatus(
-          `The answer reached the ${assessment.reserve.toLocaleString('en-US')}-token `
-          + 'output reserve and may be incomplete; this was reported by the provider. '
+          `The completion reached its ${assessment.reserve.toLocaleString('en-US')}-token `
+          + 'combined reasoning/final limit and may be incomplete; this was reported '
+          + 'by the provider. '
           + 'Use /clear if you need to recover conversation space.',
           { title: 'output limit', tone: 'warning' },
         );
@@ -393,7 +455,9 @@ export function createCli({
         return true;
       }
       try {
-        metrics.setContextBudget(Number(requested), session.messages());
+        metrics.setContextBudget(Number(requested), session.messages(), {
+          reasoningBudget: currentReasoningBudget(),
+        });
         contextWarningShown = false;
         writeStatus(contextSummary(
           `Session context budget set to ${Number(requested).toLocaleString('en-US')} tokens.`,
@@ -411,7 +475,7 @@ export function createCli({
       const options = parseModelOptions(args);
       if (!options) {
         error.write(
-          'Usage: /models [id] [auto|on|off] [clear|keep]\n',
+          'Usage: /models [id] [auto|on|off|low|medium|high] [clear|keep]\n',
         );
         return true;
       }
@@ -428,7 +492,8 @@ export function createCli({
                 + ` · reasoning ${item.reasoning}`);
             }
             rows.push(
-              'Use /models <id> [auto|on|off] [clear|keep] to select one.',
+              'Use /models <id> [auto|on|off|low|medium|high] [clear|keep] '
+              + 'to select one.',
             );
             writeStatus(rows.join('\n'), { title: 'models' });
           } else {
@@ -463,18 +528,26 @@ export function createCli({
         const previous = localServer.configuration?.();
         const changes = requested !== previous?.preset
           || (options.reasoning != null && options.reasoning !== previous?.reasoning);
-        if (changes && historyChoiceRequired(requested, options.history)) return true;
+        const budgetChanges = options.reasoningBudget > 0
+          && options.reasoningBudget !== previous?.reasoningBudget;
+        if (
+          (changes || budgetChanges)
+          && historyChoiceRequired(requested, options.history)
+        ) return true;
         try {
           const selected = await localServer.selectModel(requested, {
             reasoning: options.reasoning,
+            reasoningBudget: options.reasoningBudget,
             onStatus: () => {},
           });
           runtimeHint = selected;
-          if (changes) {
+          if (changes || budgetChanges) {
             const historyMessage = applyHistoryChoice(options.history);
             metrics.setContextLimits({ server: selected.contextLimit });
             writeStatus(
-              `Model changed to ${requested} · reasoning ${selected.reasoning}. `
+              `Model changed to ${requested} · reasoning ${selected.reasoning}`
+              + `${selected.reasoning === 'off' ? ''
+                : `/${selected.reasoningLevel} (${selected.reasoningBudget} tok)`}. `
               + historyMessage,
               { tone: 'success' },
             );
@@ -545,8 +618,12 @@ export function createCli({
       const managed = managedModelSelection();
       if (!requested) {
         if (managed) {
-          const current = localServer.configuration?.().reasoning ?? 'unknown';
-          writeStatus(reasoningStatus({ mode: current }, { managed: true }), {
+          const configuration = localServer.configuration?.() ?? {};
+          writeStatus(reasoningStatus({
+            mode: configuration.reasoning ?? 'unknown',
+            level: configuration.reasoningLevel,
+            budget: configuration.reasoningBudget,
+          }, { managed: true }), {
             title: 'reasoning',
           });
         } else {
@@ -557,8 +634,9 @@ export function createCli({
         }
         return true;
       }
-      if (!['auto', 'on', 'off'].includes(requested)) {
-        error.write('Usage: /reasoning [auto|on|off]\n');
+      const selection = reasoningSelection(requested);
+      if (!selection) {
+        error.write('Usage: /reasoning [auto|on|off|low|medium|high]\n');
         return true;
       }
       if (managed) {
@@ -566,28 +644,53 @@ export function createCli({
           error.write('Reasoning control is unavailable for this server.\n');
           return true;
         }
-        const previous = localServer.configuration?.().reasoning;
+        const previous = localServer.configuration?.() ?? {};
         try {
-          const selected = await localServer.selectReasoning(requested, {
+          const selected = await localServer.selectReasoning(selection.mode, {
+            reasoningBudget: selection.budget || previous.reasoningBudget,
             onStatus: () => {},
           });
           runtimeHint = selected;
-          if (selected.reasoning !== previous) {
+          const modeChanged = selected.reasoning !== previous.reasoning;
+          const budgetChanged = selected.reasoning !== 'off'
+            && selected.reasoningBudget !== previous.reasoningBudget;
+          if (modeChanged) {
             resetConversation();
             writeStatus(
-              `Reasoning generation request changed to ${selected.reasoning}. `
+              `Reasoning changed to ${selected.reasoning}`
+              + `${selected.reasoning === 'off' ? ''
+                : `/${selected.reasoningLevel} `
+                  + `(${selected.reasoningBudget.toLocaleString('en-US')} tokens)`}. `
               + 'Conversation cleared. Reasoning content remains hidden.',
+              { tone: 'success' },
+            );
+          } else if (budgetChanged) {
+            writeStatus(
+              `Reasoning level changed to ${selected.reasoningLevel} `
+              + `(${selected.reasoningBudget.toLocaleString('en-US')} tokens). `
+              + 'Conversation history kept.',
               { tone: 'success' },
             );
           } else {
             writeStatus(
-              `Reasoning generation request ${selected.reasoning} is already active.`,
+              `Reasoning ${selected.reasoning === 'off'
+                ? 'off'
+                : `${selected.reasoningLevel} (${selected.reasoningBudget} tokens)`}`
+              + ' is already active.',
             );
           }
           if (output.isTTY) await writeStartup();
         } catch (cause) {
           error.write(`Could not change reasoning: ${cause.message}\n`);
         }
+        return true;
+      }
+
+      if (Object.hasOwn(REASONING_LEVELS, requested)) {
+        error.write(
+          'Reasoning token levels require the μgem-managed llama.cpp server; '
+          + 'this external endpoint only has verified auto/on/off control.\n',
+        );
         return true;
       }
 
@@ -599,7 +702,7 @@ export function createCli({
       }
       const previous = provider.reasoningConfiguration?.().mode ?? 'unknown';
       try {
-        const selected = await provider.selectReasoning(requested);
+        const selected = await provider.selectReasoning(selection.mode);
         runtimeHint = {
           ...runtimeHint,
           reasoning: selected.mode,

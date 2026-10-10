@@ -1,5 +1,5 @@
 const UNAVAILABLE = 'unavailable';
-export const DEFAULT_OUTPUT_RESERVE = 1_024;
+export const DEFAULT_OUTPUT_RESERVE = 4_096;
 
 function finiteNonNegative(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -124,14 +124,21 @@ export function createMetrics({
     );
   }
 
-  function assessContext(messages = [], { capacity: override } = {}) {
+  function assessContext(messages = [], {
+    capacity: override,
+    reasoningBudget = 0,
+  } = {}) {
     const capacity = activeCapacity(override);
     const used = estimateMessages(messages);
-    const reserve = reservedOutputTokens(capacity);
+    const outputReserve = reservedOutputTokens(capacity);
+    const reasoningReserve = tokenCount(reasoningBudget) ?? 0;
+    const reserve = outputReserve + reasoningReserve;
     return Object.freeze({
       allowed: capacity == null || used + reserve <= capacity,
       used,
       capacity,
+      outputReserve,
+      reasoningReserve,
       reserve,
       required: used + reserve,
       available: capacity == null ? null : Math.max(0, capacity - used - reserve),
@@ -150,8 +157,14 @@ export function createMetrics({
     });
   }
 
-  function begin(messages = []) {
+  function begin(messages = [], {
+    outputReserve = null,
+    reasoningBudget = 0,
+  } = {}) {
     const startedAt = now();
+    const completionOutputBudget = positiveTokenLimit(outputReserve)
+      ?? reservedOutputTokens();
+    const completionReasoningBudget = tokenCount(reasoningBudget) ?? 0;
     let firstContentAt = null;
     let output = '';
     const provider = {};
@@ -243,6 +256,11 @@ export function createMetrics({
         const visibleOutputTokens = estimateTokens(output);
         const contextUsed = inputTokens.value + visibleOutputTokens;
         const contextSource = 'estimated';
+        const generationContextUsed = inputTokens.value + outputTokens.value;
+        const generationContextSource = inputTokens.source === 'reported'
+          && outputTokens.source === 'reported'
+          ? 'reported'
+          : 'estimated';
         currentUsed = contextUsed;
         currentSource = contextSource;
 
@@ -257,11 +275,22 @@ export function createMetrics({
             outputTokens.source === 'reported' ? 'measured' : 'estimated',
           ),
           finishReason: provider.finishReason ?? null,
+          completionBudget: Object.freeze({
+            output: completionOutputBudget,
+            reasoning: completionReasoningBudget,
+            total: completionOutputBudget + completionReasoningBudget,
+          }),
           context: Object.freeze({
             used: contextUsed,
             budget: knownBudget,
             serverLimit: knownServerLimit,
             source: contextSource,
+          }),
+          generationContext: Object.freeze({
+            used: generationContextUsed,
+            budget: knownBudget,
+            serverLimit: knownServerLimit,
+            source: generationContextSource,
           }),
         });
         return latest;
@@ -284,6 +313,7 @@ export function createMetrics({
     const budget = record.context.budget ?? 'N/A';
     const limit = record.context.serverLimit ?? 'N/A';
     const contextBar = formatContextBar(record.context);
+    const generationBar = formatContextBar(record.generationContext);
     return [
       ...reasoningLine,
       `Input tokens: ${withSource(formatTokens(record.inputTokens), record.inputTokens)}`,
@@ -294,8 +324,11 @@ export function createMetrics({
       `Wall throughput: ${withSource(formatRate(record.wallThroughput), record.wallThroughput)}`,
       `Context: ${contextBar} (${record.context.source})`,
       `         ${formatContextDetails(record.context)}`,
+      `Generation peak: ${generationBar} (${record.generationContext.source})`,
+      `                 ${formatContextDetails(record.generationContext)}`,
       `Context limits: ${budget} budget / ${limit} server`,
-      `Output reserve: ${reservedOutputTokens(record.context.budget ?? record.context.serverLimit)} tokens`,
+      `Final-output reserve: ${record.completionBudget.output} tokens`,
+      `Reasoning budget: ${record.completionBudget.reasoning} tokens`,
       `Per-answer footer: ${footerEnabled ? 'on' : 'off'}.`,
       '',
     ].join('\n');
@@ -316,6 +349,11 @@ export function createMetrics({
         + ` (${record.generationThroughput.source}) · ${formatSeconds(record.latency.value)} wall`,
       `  context    ${formatContextBar(record.context, { width: barWidth })}`,
       `             ${formatContextDetails(record.context)} (${record.context.source})`,
+      `  peak       ${formatContextBar(record.generationContext, { width: barWidth })}`,
+      `             ${formatContextDetails(record.generationContext)}`
+        + ` (${record.generationContext.source})`,
+      `  budget     ${record.completionBudget.reasoning.toLocaleString('en-US')} reasoning`
+        + ` + ${record.completionBudget.output?.toLocaleString('en-US') ?? 'N/A'} final tok`,
       '',
     );
     return lines.join('\n');
@@ -345,7 +383,7 @@ export function createMetrics({
         if (knownBudget > knownServerLimit) knownBudget = null;
       }
     },
-    setContextBudget(value, messages = []) {
+    setContextBudget(value, messages = [], { reasoningBudget = 0 } = {}) {
       const budget = positiveTokenLimit(value);
       if (budget == null) {
         throw new RangeError('Context budget must be a positive integer.');
@@ -361,11 +399,14 @@ export function createMetrics({
           + `${formatInteger(knownServerLimit)}.`,
         );
       }
-      const assessment = assessContext(messages, { capacity: budget });
+      const assessment = assessContext(messages, {
+        capacity: budget,
+        reasoningBudget,
+      });
       if (!assessment.allowed) {
         throw new RangeError(
           `Current conversation needs about ${formatInteger(assessment.required)} tokens `
-          + 'including the output reserve. Use /clear before lowering the budget.',
+          + 'including the completion reserve. Use /clear before lowering the budget.',
         );
       }
       knownBudget = budget;
@@ -376,6 +417,7 @@ export function createMetrics({
       return contextStatus();
     },
     resetContext() {
+      latest = null;
       currentUsed = 0;
       currentSource = 'estimated';
     },

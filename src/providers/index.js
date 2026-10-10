@@ -151,7 +151,7 @@ export function createProvider(options = {}) {
     return result;
   }
 
-  function chatBody(messages, stream, { maxTokens } = {}) {
+  function chatBody(messages, stream, { maxTokens, reasoningBudget } = {}) {
     const body = {
       model,
       messages,
@@ -159,6 +159,9 @@ export function createProvider(options = {}) {
     };
     if (Number.isSafeInteger(maxTokens) && maxTokens > 0) {
       body.max_tokens = maxTokens;
+    }
+    if (Number.isSafeInteger(reasoningBudget) && reasoningBudget > 0) {
+      body.reasoning_budget_tokens = reasoningBudget;
     }
     if (stream) body.stream_options = { include_usage: true };
     if (reasoningMode !== 'auto') {
@@ -306,11 +309,14 @@ export function createProvider(options = {}) {
       }
     },
 
-    async complete(messages, { maxTokens } = {}) {
+    async complete(messages, { maxTokens, reasoningBudget } = {}) {
       const payload = await request('/v1/chat/completions', {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify(chatBody(messages, false, { maxTokens })),
+        body: JSON.stringify(chatBody(messages, false, {
+          maxTokens,
+          reasoningBudget,
+        })),
       });
       const content = payload?.choices?.[0]?.message?.content;
       if (typeof content !== 'string') {
@@ -322,7 +328,12 @@ export function createProvider(options = {}) {
       return content;
     },
 
-    async *stream(messages, { signal, onMetadata, maxTokens } = {}) {
+    async *stream(messages, {
+      signal,
+      onMetadata,
+      maxTokens,
+      reasoningBudget,
+    } = {}) {
       const endpoint = `${baseUrl}/v1/chat/completions`;
       const controller = new AbortController();
       let timedOut = false;
@@ -342,7 +353,10 @@ export function createProvider(options = {}) {
           response = await fetchImpl(endpoint, {
             method: 'POST',
             headers: headers(),
-            body: JSON.stringify(chatBody(messages, true, { maxTokens })),
+            body: JSON.stringify(chatBody(messages, true, {
+              maxTokens,
+              reasoningBudget,
+            })),
             signal: controller.signal,
           });
         } catch (cause) {

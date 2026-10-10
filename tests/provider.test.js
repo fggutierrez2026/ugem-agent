@@ -408,6 +408,22 @@ test('stream reserves output tokens and exposes a length finish reason', async (
   });
 });
 
+test('stream sends separate reasoning and total completion budgets', async () => {
+  await withServer(async (request, response) => {
+    const body = JSON.parse(await readBody(request));
+    assert.equal(body.max_tokens, 8_192);
+    assert.equal(body.reasoning_budget_tokens, 4_096);
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.end('data: [DONE]\n\n');
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl });
+    for await (const chunk of provider.stream([], {
+      maxTokens: 8_192,
+      reasoningBudget: 4_096,
+    })) assert.fail(`Unexpected chunk: ${chunk}`);
+  });
+});
+
 test('stream cancellation aborts the response', async () => {
   await withServer((request, response) => {
     response.writeHead(200, { 'content-type': 'text/event-stream' });
