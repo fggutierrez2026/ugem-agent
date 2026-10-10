@@ -68,6 +68,7 @@ function streamMetadata(payload) {
     contextLimit,
     tokensPredicted: payload?.tokens_predicted,
     tokensEvaluated: payload?.tokens_evaluated,
+    finishReason: payload?.choices?.[0]?.finish_reason,
   };
   return Object.values(metadata).some((value) => value != null) ? metadata : null;
 }
@@ -150,12 +151,15 @@ export function createProvider(options = {}) {
     return result;
   }
 
-  function chatBody(messages, stream) {
+  function chatBody(messages, stream, { maxTokens } = {}) {
     const body = {
       model,
       messages,
       stream,
     };
+    if (Number.isSafeInteger(maxTokens) && maxTokens > 0) {
+      body.max_tokens = maxTokens;
+    }
     if (stream) body.stream_options = { include_usage: true };
     if (reasoningMode !== 'auto') {
       body.chat_template_kwargs = {
@@ -302,11 +306,11 @@ export function createProvider(options = {}) {
       }
     },
 
-    async complete(messages) {
+    async complete(messages, { maxTokens } = {}) {
       const payload = await request('/v1/chat/completions', {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify(chatBody(messages, false)),
+        body: JSON.stringify(chatBody(messages, false, { maxTokens })),
       });
       const content = payload?.choices?.[0]?.message?.content;
       if (typeof content !== 'string') {
@@ -318,7 +322,7 @@ export function createProvider(options = {}) {
       return content;
     },
 
-    async *stream(messages, { signal, onMetadata } = {}) {
+    async *stream(messages, { signal, onMetadata, maxTokens } = {}) {
       const endpoint = `${baseUrl}/v1/chat/completions`;
       const controller = new AbortController();
       let timedOut = false;
@@ -338,7 +342,7 @@ export function createProvider(options = {}) {
           response = await fetchImpl(endpoint, {
             method: 'POST',
             headers: headers(),
-            body: JSON.stringify(chatBody(messages, true)),
+            body: JSON.stringify(chatBody(messages, true, { maxTokens })),
             signal: controller.signal,
           });
         } catch (cause) {

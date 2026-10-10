@@ -3,7 +3,11 @@ import { createProvider } from '../providers/index.js';
 import { createLocalServer } from '../providers/local-server.js';
 import { createSession } from '../session/index.js';
 import { createRenderer } from '../renderer/index.js';
-import { createMetrics } from '../metrics/index.js';
+import {
+  createMetrics,
+  formatContextBar,
+  formatContextDetails,
+} from '../metrics/index.js';
 import {
   APPEARANCE_MODES,
   formatMetricsPanel,
@@ -27,6 +31,7 @@ const HELP = `Commands:
   /clear           Clear conversation history
   /models [id] [options]    List/select; options: reasoning, clear|keep
   /reasoning [mode]         Show/change reasoning for the active model
+  /context [tokens|auto]    Show/set the validated session context budget
   /theme [mode] [palette]   mode: auto|dark|light
   /code-color [color]       Show/change fenced-code color
   /stats [on|off]  Show metrics or toggle the per-answer footer
@@ -95,6 +100,54 @@ export function createCli({
     session.clear();
     metrics.resetContext();
     contextWarningShown = false;
+  }
+
+  async function refreshContextLimit() {
+    const current = metrics.contextStatus();
+    if (current.serverLimit != null) return current;
+    const configuredLimit = runtimeHint.contextLimit
+      ?? localServer.configuration?.().contextLimit;
+    if (Number.isSafeInteger(configuredLimit) && configuredLimit > 0) {
+      metrics.setContextLimits({ server: configuredLimit });
+      return metrics.contextStatus();
+    }
+    if (typeof provider.runtimeInfo === 'function') {
+      try {
+        const inspected = await provider.runtimeInfo();
+        if (Number.isSafeInteger(inspected.contextLimit) && inspected.contextLimit > 0) {
+          runtimeHint = { ...runtimeHint, ...inspected };
+          metrics.setContextLimits({ server: inspected.contextLimit });
+        }
+      } catch {
+        // Context inspection is optional for OpenAI-compatible providers.
+      }
+    }
+    return metrics.contextStatus();
+  }
+
+  function contextSummary(prefix) {
+    const status = metrics.contextStatus();
+    const capacity = status.budget ?? status.serverLimit;
+    const inputRoom = capacity == null
+      ? null
+      : Math.max(0, capacity - status.used - status.outputReserve);
+    return [
+      ...(prefix ? [prefix] : []),
+      `Usage: ${formatContextBar(status)} (${status.source})`,
+      `Retained: ${formatContextDetails(status)} (${status.source})`,
+      `Session budget: ${status.budget == null
+        ? 'auto (server limit)'
+        : status.budget.toLocaleString('en-US') + ' tokens'}.`,
+      `Confirmed server limit: ${status.serverLimit == null
+        ? 'N/A'
+        : status.serverLimit.toLocaleString('en-US') + ' tokens'}.`,
+      `Reserved output: ${status.outputReserve.toLocaleString('en-US')} tokens per answer.`,
+      `Estimated input room after reserve: ${inputRoom == null
+        ? 'N/A'
+        : inputRoom.toLocaleString('en-US') + ' tokens'}.`,
+      'This command does not change llama-server --ctx-size; changing that '
+        + 'server limit may require a model reload or server restart.',
+    ].join('\n');
   }
 
   function managedModelSelection() {
@@ -212,6 +265,25 @@ export function createCli({
   }
 
   async function ask(question) {
+    const prospectiveMessages = [
+      ...session.messages(),
+      { role: 'user', content: question },
+    ];
+    const assessment = metrics.assessContext(prospectiveMessages);
+    if (!assessment.allowed) {
+      const overflow = assessment.required - assessment.capacity;
+      writeStatus(
+        `Request not sent: the conversation needs about `
+        + `${assessment.required.toLocaleString('en-US')} tokens `
+        + `(${assessment.used.toLocaleString('en-US')} estimated input + `
+        + `${assessment.reserve.toLocaleString('en-US')} reserved output), `
+        + `which exceeds the ${assessment.capacity.toLocaleString('en-US')}-token `
+        + `budget by ${overflow.toLocaleString('en-US')}. Use /clear to start `
+        + 'a new conversation or /context to inspect the limits.',
+        { title: 'context overflow', tone: 'warning' },
+      );
+      return;
+    }
     let answer = '';
     let wroteChunk = false;
     let measurement;
@@ -222,6 +294,7 @@ export function createCli({
       writeAssistantLabel();
       for await (const chunk of provider.stream(session.messages(), {
         signal: activeController.signal,
+        maxTokens: assessment.reserve,
         onMetadata: (metadata) => measurement.addProviderMetadata(metadata),
       })) {
         answer += chunk;
@@ -244,6 +317,14 @@ export function createCli({
           theme: selectedTheme,
           appearance: resolvedAppearance,
         }));
+      }
+      if (record.finishReason === 'length') {
+        writeStatus(
+          `The answer reached the ${assessment.reserve.toLocaleString('en-US')}-token `
+          + 'output reserve and may be incomplete; this was reported by the provider. '
+          + 'Use /clear if you need to recover conversation space.',
+          { title: 'output limit', tone: 'warning' },
+        );
       }
       const capacity = record.context.budget ?? record.context.serverLimit;
       if (
@@ -287,6 +368,39 @@ export function createCli({
     if (command === '/clear') {
       resetConversation();
       writeStatus('Conversation cleared.', { tone: 'success' });
+      return true;
+    }
+
+    const context = line.match(/^\/context(?:\s+(.+))?$/i);
+    if (context) {
+      const requested = context[1]?.trim().toLowerCase();
+      await refreshContextLimit();
+      if (requested == null) {
+        writeStatus(contextSummary(), { title: 'context' });
+        return true;
+      }
+      if (requested === 'auto') {
+        metrics.clearContextBudget();
+        contextWarningShown = false;
+        writeStatus(contextSummary('Session context budget returned to auto.'), {
+          title: 'context',
+          tone: 'success',
+        });
+        return true;
+      }
+      if (!/^\d+$/.test(requested)) {
+        error.write('Usage: /context [tokens|auto]\n');
+        return true;
+      }
+      try {
+        metrics.setContextBudget(Number(requested), session.messages());
+        contextWarningShown = false;
+        writeStatus(contextSummary(
+          `Session context budget set to ${Number(requested).toLocaleString('en-US')} tokens.`,
+        ), { title: 'context', tone: 'success' });
+      } catch (cause) {
+        error.write(`Could not set context budget: ${cause.message}\n`);
+      }
       return true;
     }
 
@@ -637,6 +751,9 @@ export function createCli({
   async function run() {
     try {
       runtimeHint = await localServer.ensureRunning();
+      if (runtimeHint.contextLimit != null) {
+        metrics.setContextLimits({ server: runtimeHint.contextLimit });
+      }
       if (output.isTTY) await writeStartup();
       readline = createInterface({
         input,

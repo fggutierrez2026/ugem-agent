@@ -1,4 +1,5 @@
 const UNAVAILABLE = 'unavailable';
+export const DEFAULT_OUTPUT_RESERVE = 1_024;
 
 function finiteNonNegative(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
@@ -92,14 +93,62 @@ export function createMetrics({
   now = () => performance.now(),
   contextBudget = null,
   serverLimit = null,
+  outputReserve = DEFAULT_OUTPUT_RESERVE,
   footer = true,
 } = {}) {
   let latest = null;
   let footerEnabled = Boolean(footer);
   let knownBudget = positiveTokenLimit(contextBudget);
   let knownServerLimit = positiveTokenLimit(serverLimit);
+  if (
+    knownBudget != null
+    && knownServerLimit != null
+    && knownBudget > knownServerLimit
+  ) knownBudget = null;
+  const configuredOutputReserve = positiveTokenLimit(outputReserve)
+    ?? DEFAULT_OUTPUT_RESERVE;
   let currentUsed = 0;
   let currentSource = 'estimated';
+
+  function activeCapacity(override) {
+    return positiveTokenLimit(override)
+      ?? knownBudget
+      ?? knownServerLimit;
+  }
+
+  function reservedOutputTokens(capacity = activeCapacity()) {
+    if (capacity == null) return configuredOutputReserve;
+    return Math.min(
+      configuredOutputReserve,
+      Math.max(1, Math.floor(capacity / 4)),
+    );
+  }
+
+  function assessContext(messages = [], { capacity: override } = {}) {
+    const capacity = activeCapacity(override);
+    const used = estimateMessages(messages);
+    const reserve = reservedOutputTokens(capacity);
+    return Object.freeze({
+      allowed: capacity == null || used + reserve <= capacity,
+      used,
+      capacity,
+      reserve,
+      required: used + reserve,
+      available: capacity == null ? null : Math.max(0, capacity - used - reserve),
+      source: 'estimated',
+    });
+  }
+
+  function contextStatus() {
+    const capacity = activeCapacity();
+    return Object.freeze({
+      used: currentUsed,
+      budget: knownBudget,
+      serverLimit: knownServerLimit,
+      outputReserve: reservedOutputTokens(capacity),
+      source: currentSource,
+    });
+  }
 
   function begin(messages = []) {
     const startedAt = now();
@@ -122,12 +171,20 @@ export function createMetrics({
           provider.timings = { ...provider.timings, ...metadata.timings };
         }
         const contextLimit = positiveTokenLimit(metadata.contextLimit);
-        if (contextLimit != null) knownServerLimit = contextLimit;
+        if (contextLimit != null) {
+          knownServerLimit = contextLimit;
+          if (knownBudget != null && knownBudget > knownServerLimit) {
+            knownBudget = null;
+          }
+        }
         if (tokenCount(metadata.tokensPredicted) != null) {
           provider.tokensPredicted = metadata.tokensPredicted;
         }
         if (tokenCount(metadata.tokensEvaluated) != null) {
           provider.tokensEvaluated = metadata.tokensEvaluated;
+        }
+        if (typeof metadata.finishReason === 'string') {
+          provider.finishReason = metadata.finishReason;
         }
       },
 
@@ -199,6 +256,7 @@ export function createMetrics({
             wallRate,
             outputTokens.source === 'reported' ? 'measured' : 'estimated',
           ),
+          finishReason: provider.finishReason ?? null,
           context: Object.freeze({
             used: contextUsed,
             budget: knownBudget,
@@ -237,6 +295,7 @@ export function createMetrics({
       `Context: ${contextBar} (${record.context.source})`,
       `         ${formatContextDetails(record.context)}`,
       `Context limits: ${budget} budget / ${limit} server`,
+      `Output reserve: ${reservedOutputTokens(record.context.budget ?? record.context.serverLimit)} tokens`,
       `Per-answer footer: ${footerEnabled ? 'on' : 'off'}.`,
       '',
     ].join('\n');
@@ -267,21 +326,54 @@ export function createMetrics({
     latest: () => latest,
     formatStats,
     formatFooter,
-    contextStatus() {
-      return Object.freeze({
-        used: currentUsed,
-        budget: knownBudget,
-        serverLimit: knownServerLimit,
-        source: currentSource,
-      });
-    },
+    contextStatus,
+    assessContext,
     footerEnabled: () => footerEnabled,
     setFooterEnabled(value) {
       footerEnabled = Boolean(value);
     },
-    setContextLimits({ budget = knownBudget, server = knownServerLimit } = {}) {
+    setContextLimits(limits = {}) {
+      const serverChanged = Object.hasOwn(limits, 'server');
+      const budget = Object.hasOwn(limits, 'budget')
+        ? limits.budget
+        : knownBudget;
+      const server = serverChanged ? limits.server : knownServerLimit;
       knownBudget = positiveTokenLimit(budget);
       knownServerLimit = positiveTokenLimit(server);
+      if (serverChanged && knownServerLimit == null) knownBudget = null;
+      if (knownBudget != null && knownServerLimit != null) {
+        if (knownBudget > knownServerLimit) knownBudget = null;
+      }
+    },
+    setContextBudget(value, messages = []) {
+      const budget = positiveTokenLimit(value);
+      if (budget == null) {
+        throw new RangeError('Context budget must be a positive integer.');
+      }
+      if (knownServerLimit == null) {
+        throw new RangeError(
+          'The server context limit is unknown, so this budget cannot be validated.',
+        );
+      }
+      if (budget > knownServerLimit) {
+        throw new RangeError(
+          `Context budget ${formatInteger(budget)} exceeds the confirmed server limit `
+          + `${formatInteger(knownServerLimit)}.`,
+        );
+      }
+      const assessment = assessContext(messages, { capacity: budget });
+      if (!assessment.allowed) {
+        throw new RangeError(
+          `Current conversation needs about ${formatInteger(assessment.required)} tokens `
+          + 'including the output reserve. Use /clear before lowering the budget.',
+        );
+      }
+      knownBudget = budget;
+      return contextStatus();
+    },
+    clearContextBudget() {
+      knownBudget = null;
+      return contextStatus();
     },
     resetContext() {
       currentUsed = 0;

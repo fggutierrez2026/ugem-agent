@@ -382,7 +382,29 @@ test('stream exposes reported usage, timings, and server context metadata', asyn
       contextLimit: 4_096,
       tokensPredicted: undefined,
       tokensEvaluated: undefined,
+      finishReason: undefined,
     }]);
+  });
+});
+
+test('stream reserves output tokens and exposes a length finish reason', async () => {
+  await withServer(async (request, response) => {
+    assert.equal((JSON.parse(await readBody(request))).max_tokens, 256);
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n');
+    response.write('data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n');
+    response.end('data: [DONE]\n\n');
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl });
+    const metadata = [];
+    const chunks = [];
+    for await (const chunk of provider.stream([], {
+      maxTokens: 256,
+      onMetadata: (value) => metadata.push(value),
+    })) chunks.push(chunk);
+
+    assert.deepEqual(chunks, ['partial']);
+    assert.equal(metadata.at(-1).finishReason, 'length');
   });
 });
 

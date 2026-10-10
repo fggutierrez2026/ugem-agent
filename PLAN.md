@@ -69,9 +69,9 @@
 ### T009 — Context budget management
 - [x] Render a proportional context bar when the server limit is known, with explicit `N/A` fallback.
 - [x] Warn once when estimated retained context reaches 90%; reset the warning with `/clear` or a model/reasoning change.
-- [ ] Add `/context` viewer and set session budget within confirmed server limits.
-- [ ] Reserve output tokens; prevent silent truncation; warn on overflow and offer `/clear`.
-- [ ] Explain server `--ctx-size` may require restart/reload; no claim of dynamically changing server context.
+- [x] Add `/context` viewer and set session budget within confirmed server limits.
+- [x] Reserve output tokens; prevent silent truncation; warn on overflow and offer `/clear`.
+- [x] Explain server `--ctx-size` may require restart/reload; no claim of dynamically changing server context.
 - **Accept:** limits validated, overflow is explicit, estimated usage labeled.
 
 ### T010 — Settings persistence and UI

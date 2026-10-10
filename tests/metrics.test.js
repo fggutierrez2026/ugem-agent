@@ -165,3 +165,60 @@ test('clearing a session resets current context without deleting last metrics', 
   assert.equal(metrics.contextStatus().used, 0);
   assert.equal(metrics.latest(), latest);
 });
+
+test('session context budgets are validated against confirmed server limits', () => {
+  const unknown = createMetrics();
+  assert.throws(
+    () => unknown.setContextBudget(4_096),
+    /server context limit is unknown/,
+  );
+
+  const metrics = createMetrics({ serverLimit: 8_192 });
+  assert.throws(
+    () => metrics.setContextBudget(16_384),
+    /exceeds the confirmed server limit 8,192/,
+  );
+  metrics.setContextBudget(4_096);
+  assert.equal(metrics.contextStatus().budget, 4_096);
+  assert.equal(metrics.contextStatus().outputReserve, 1_024);
+  metrics.clearContextBudget();
+  assert.equal(metrics.contextStatus().budget, null);
+});
+
+test('context assessment reserves output and rejects estimated overflow', () => {
+  const metrics = createMetrics({ serverLimit: 16, outputReserve: 8 });
+  const allowed = metrics.assessContext([
+    { role: 'user', content: '12345678901234567890' },
+  ]);
+  assert.deepEqual(allowed, {
+    allowed: true,
+    used: 5,
+    capacity: 16,
+    reserve: 4,
+    required: 9,
+    available: 7,
+    source: 'estimated',
+  });
+
+  const overflow = metrics.assessContext([
+    { role: 'user', content: 'x'.repeat(52) },
+  ]);
+  assert.equal(overflow.allowed, false);
+  assert.equal(overflow.required, 17);
+});
+
+test('a smaller server limit clears an incompatible session budget', () => {
+  const metrics = createMetrics({ serverLimit: 8_192, contextBudget: 4_096 });
+  metrics.setContextLimits({ server: 2_048 });
+
+  assert.equal(metrics.contextStatus().budget, null);
+  assert.equal(metrics.contextStatus().serverLimit, 2_048);
+});
+
+test('losing the confirmed server limit clears the validated session budget', () => {
+  const metrics = createMetrics({ serverLimit: 8_192, contextBudget: 4_096 });
+  metrics.setContextLimits({ server: null });
+
+  assert.equal(metrics.contextStatus().budget, null);
+  assert.equal(metrics.contextStatus().serverLimit, null);
+});

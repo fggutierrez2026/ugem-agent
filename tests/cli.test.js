@@ -238,6 +238,83 @@ test('context use at 90 percent emits one warning even when the footer is off', 
   assert.match(output.read(), /100\.0% used · 0 tokens available/);
 });
 
+test('/context shows limits and sets only a validated session budget', async () => {
+  const output = capture();
+  const error = capture();
+  const metrics = createMetrics({ serverLimit: 8_192 });
+  const cli = createCli({ output, error, metrics });
+
+  await cli.handleLine('/context');
+  await cli.handleLine('/context 4096');
+  await cli.handleLine('/context 16384');
+
+  assert.match(output.read(), /Confirmed server limit: 8,192 tokens/);
+  assert.match(output.read(), /Reserved output: 1,024 tokens per answer/);
+  assert.match(output.read(), /Session context budget set to 4,096 tokens/);
+  assert.match(output.read(), /does not change llama-server --ctx-size/);
+  assert.equal(metrics.contextStatus().budget, 4_096);
+  assert.match(error.read(), /exceeds the confirmed server limit 8,192/);
+});
+
+test('/context refuses an unvalidated budget when the server limit is unknown', async () => {
+  const error = capture();
+  const cli = createCli({
+    output: capture(),
+    error,
+    metrics: createMetrics(),
+    provider: {},
+  });
+
+  await cli.handleLine('/context 4096');
+
+  assert.match(error.read(), /server context limit is unknown/);
+});
+
+test('estimated context overflow is explicit and does not contact the provider', async () => {
+  const output = capture();
+  const session = createSession();
+  let calls = 0;
+  const cli = createCli({
+    output,
+    error: capture(),
+    session,
+    metrics: createMetrics({ serverLimit: 8, outputReserve: 4 }),
+    provider: { stream: async function* () { calls += 1; } },
+  });
+
+  await cli.handleLine('x'.repeat(28));
+
+  assert.equal(calls, 0);
+  assert.deepEqual(session.messages(), []);
+  assert.match(output.read(), /context overflow/);
+  assert.match(output.read(), /Request not sent/);
+  assert.match(output.read(), /Use \/clear/);
+});
+
+test('answers receive an output reserve and provider truncation is explicit', async () => {
+  const output = capture();
+  let receivedMaxTokens;
+  const provider = {
+    async *stream(messages, { maxTokens, onMetadata }) {
+      receivedMaxTokens = maxTokens;
+      yield 'partial';
+      onMetadata({ finishReason: 'length' });
+    },
+  };
+  const cli = createCli({
+    output,
+    error: capture(),
+    provider,
+    metrics: createMetrics({ serverLimit: 4_096, footer: false }),
+  });
+
+  await cli.handleLine('question');
+
+  assert.equal(receivedMaxTokens, 1_024);
+  assert.match(output.read(), /output limit/);
+  assert.match(output.read(), /incomplete; this was reported by the provider/);
+});
+
 test('/models lists managed presets and clears history when requested', async () => {
   const output = capture();
   const session = createSession();
