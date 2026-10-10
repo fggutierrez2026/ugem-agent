@@ -117,6 +117,13 @@ test('the concise footer is optional and retains metric provenance', () => {
   assert.equal(metrics.footerEnabled(), false);
 });
 
+test('the per-answer metrics footer is enabled by default', () => {
+  const metrics = createMetrics();
+
+  assert.equal(metrics.footerEnabled(), true);
+  assert.match(metrics.formatStats(), /Per-answer footer: on/);
+});
+
 test('the footer can identify the selected reasoning mode', () => {
   const metrics = createMetrics({ now: clock(0, 100, 1_100) });
   const measurement = metrics.begin([{ role: 'user', content: '1234' }]);
@@ -124,7 +131,11 @@ test('the footer can identify the selected reasoning mode', () => {
 
   assert.match(
     metrics.formatFooter(measurement.finish(), { reasoning: 'off' }),
-    /mode\s+reasoning off/,
+    /mode\s+reasoning request off/,
+  );
+  assert.match(
+    metrics.formatStats(undefined, { reasoning: 'unknown' }),
+    /Reasoning generation request: unknown/,
   );
 });
 

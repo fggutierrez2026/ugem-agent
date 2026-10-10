@@ -79,6 +79,7 @@ test('streamed chunks render immediately and follow-ups receive history', async 
     output,
     error: capture(),
     provider: streamingProvider([['Hello', ' back'], ['Second']], calls),
+    metrics: createMetrics({ footer: false }),
   });
 
   await cli.handleLine('first');
@@ -424,6 +425,7 @@ test('/reasoning restarts the managed model and clears history on change', async
   session.addUserMessage('old context');
   let reasoning = 'auto';
   const localServer = {
+    managesModels: () => true,
     configuration: () => ({ preset: 'qwen3.5-4b', reasoning }),
     async selectReasoning(mode, { onStatus }) {
       onStatus('Restarting local model...');
@@ -446,8 +448,99 @@ test('/reasoning restarts the managed model and clears history on change', async
 
   await cli.handleLine('/reasoning off');
 
-  assert.match(output.read(), /Reasoning changed to off\. Conversation cleared\./);
+  assert.match(
+    output.read(),
+    /Reasoning generation request changed to off\. Conversation cleared\./,
+  );
+  assert.match(output.read(), /Reasoning content remains hidden/);
   assert.deepEqual(session.messages(), []);
+});
+
+test('/reasoning reports generation and display as separate settings', async () => {
+  const output = capture();
+  const cli = createCli({
+    output,
+    error: capture(),
+    provider: {
+      reasoningInfo: async () => ({
+        mode: 'auto',
+        capability: 'unsupported',
+        method: null,
+        display: 'hidden',
+      }),
+      stream: async function* () {},
+    },
+    localServer: { managesModels: () => false },
+  });
+
+  await cli.handleLine('/reasoning');
+
+  assert.match(output.read(), /Generation request: auto/);
+  assert.match(output.read(), /unsupported by the active model template/);
+  assert.match(output.read(), /display policy does not disable/);
+  assert.match(output.read(), /generation\./);
+});
+
+test('/reasoning uses verified external control and clears history', async () => {
+  const output = capture();
+  const session = createSession();
+  session.addUserMessage('old context');
+  let mode = 'auto';
+  const provider = {
+    reasoningConfiguration: () => ({ mode }),
+    async selectReasoning(requested) {
+      mode = requested;
+      return {
+        mode,
+        capability: 'supported',
+        method: 'chat_template_kwargs',
+        display: 'hidden',
+      };
+    },
+    stream: async function* () {},
+  };
+  const cli = createCli({
+    output,
+    error: capture(),
+    session,
+    provider,
+    localServer: { managesModels: () => false },
+  });
+
+  await cli.handleLine('/reasoning off');
+
+  assert.equal(mode, 'off');
+  assert.deepEqual(session.messages(), []);
+  assert.match(output.read(), /generation request changed to off/i);
+  assert.match(output.read(), /Reasoning content remains hidden/);
+});
+
+test('/reasoning preserves history when external capability is unknown', async () => {
+  const error = capture();
+  const session = createSession();
+  session.addUserMessage('old context');
+  const provider = {
+    reasoningConfiguration: () => ({ mode: 'auto' }),
+    async selectReasoning() {
+      const cause = new Error('endpoint exposes no verifiable reasoning control');
+      cause.code = 'unknown_reasoning';
+      throw cause;
+    },
+    stream: async function* () {},
+  };
+  const cli = createCli({
+    output: capture(),
+    error,
+    session,
+    provider,
+    localServer: { managesModels: () => false },
+  });
+
+  await cli.handleLine('/reasoning off');
+
+  assert.match(error.read(), /no verifiable reasoning control/);
+  assert.match(error.read(), /Current request remains auto/);
+  assert.deepEqual(session.messages(), [{ role: 'user', content: 'old context' }]);
 });
 
 test('startup panel reports runtime status and context without inventing reasoning', async () => {

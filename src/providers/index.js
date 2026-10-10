@@ -4,6 +4,7 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:8081';
 const DEFAULT_MODEL = 'local-model';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const UNSUPPORTED_DISCOVERY_STATUS = new Set([404, 405, 501]);
+const REASONING_MODES = new Set(['auto', 'on', 'off']);
 
 export class ProviderError extends Error {
   constructor(message, { code, status, cause } = {}) {
@@ -77,6 +78,9 @@ export function createProvider(options = {}) {
     options.baseUrl ?? env.UGEM_BASE_URL ?? DEFAULT_BASE_URL,
   );
   let model = options.model ?? env.UGEM_MODEL ?? DEFAULT_MODEL;
+  let reasoningMode = 'auto';
+  let reasoningCapability;
+  let reasoningCapabilityModel;
   const timeoutMs = positiveInteger(
     options.timeoutMs ?? env.UGEM_REQUEST_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS,
     'UGEM_REQUEST_TIMEOUT_MS',
@@ -146,6 +150,82 @@ export function createProvider(options = {}) {
     return result;
   }
 
+  function chatBody(messages, stream) {
+    const body = {
+      model,
+      messages,
+      stream,
+    };
+    if (stream) body.stream_options = { include_usage: true };
+    if (reasoningMode !== 'auto') {
+      body.chat_template_kwargs = {
+        enable_thinking: reasoningMode === 'on',
+      };
+      // Generation control and response visibility are intentionally separate.
+      // DeepSeek format keeps any reasoning trace out of message.content.
+      body.reasoning_format = 'deepseek';
+    }
+    return body;
+  }
+
+  function reasoningResult(capability, method = null) {
+    return Object.freeze({
+      mode: reasoningMode,
+      capability,
+      method,
+      display: 'hidden',
+    });
+  }
+
+  async function detectReasoningCapability() {
+    if (reasoningCapabilityModel === model && reasoningCapability) {
+      return reasoningResult(
+        reasoningCapability.capability,
+        reasoningCapability.method,
+      );
+    }
+
+    let capability = reasoningResult('unknown');
+    try {
+      const query = `model=${encodeURIComponent(model)}&autoload=false`;
+      const props = await request(`/props?${query}`, {
+        method: 'GET',
+        headers: credential ? { authorization: `Bearer ${credential}` } : {},
+      }, { requestTimeoutMs: Math.min(timeoutMs, 3_000) });
+      if (typeof props?.chat_template !== 'string') {
+        reasoningCapability = capability;
+        reasoningCapabilityModel = model;
+        return reasoningResult(capability.capability, capability.method);
+      }
+
+      const probe = async (enabled) => request('/apply-template', {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'reasoning capability probe' }],
+          chat_template_kwargs: { enable_thinking: enabled },
+          reasoning_format: 'deepseek',
+        }),
+      }, { requestTimeoutMs: Math.min(timeoutMs, 3_000) });
+      const [disabled, enabled] = await Promise.all([probe(false), probe(true)]);
+      if (
+        typeof disabled?.prompt === 'string'
+        && typeof enabled?.prompt === 'string'
+      ) {
+        capability = reasoningResult(
+          disabled.prompt === enabled.prompt ? 'unsupported' : 'supported',
+          disabled.prompt === enabled.prompt ? null : 'chat_template_kwargs',
+        );
+      }
+    } catch {
+      // OpenAI-compatible APIs have no standard reasoning capability endpoint.
+    }
+    reasoningCapability = capability;
+    reasoningCapabilityModel = model;
+    return reasoningResult(capability.capability, capability.method);
+  }
+
   return {
     async health(requestTimeoutMs = 500) {
       try {
@@ -166,6 +246,9 @@ export function createProvider(options = {}) {
         });
       }
       model = modelId.trim();
+      reasoningMode = 'auto';
+      reasoningCapability = undefined;
+      reasoningCapabilityModel = undefined;
     },
 
     async runtimeInfo() {
@@ -174,7 +257,7 @@ export function createProvider(options = {}) {
         modelSource: 'configured',
         status: 'unknown',
         contextLimit: null,
-        reasoning: 'unknown',
+        reasoning: reasoningMode === 'auto' ? 'unknown' : reasoningMode,
       });
       try {
         const query = `model=${encodeURIComponent(model)}&autoload=false`;
@@ -186,12 +269,21 @@ export function createProvider(options = {}) {
         const params = payload?.default_generation_settings?.params;
         const configuredReasoning = params?.reasoning
           ?? params?.chat_template_kwargs?.enable_thinking;
-        let reasoning = 'unknown';
-        if (configuredReasoning === true || configuredReasoning === 'true') {
+        let reasoning = reasoningMode === 'auto' ? 'unknown' : reasoningMode;
+        if (
+          reasoningMode === 'auto'
+          && (configuredReasoning === true || configuredReasoning === 'true')
+        ) {
           reasoning = 'on';
-        } else if (configuredReasoning === false || configuredReasoning === 'false') {
+        } else if (
+          reasoningMode === 'auto'
+          && (configuredReasoning === false || configuredReasoning === 'false')
+        ) {
           reasoning = 'off';
-        } else if (['on', 'off', 'auto'].includes(configuredReasoning)) {
+        } else if (
+          reasoningMode === 'auto'
+          && REASONING_MODES.has(configuredReasoning)
+        ) {
           reasoning = configuredReasoning;
         }
         return Object.freeze({
@@ -214,7 +306,7 @@ export function createProvider(options = {}) {
       const payload = await request('/v1/chat/completions', {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ model, messages, stream: false }),
+        body: JSON.stringify(chatBody(messages, false)),
       });
       const content = payload?.choices?.[0]?.message?.content;
       if (typeof content !== 'string') {
@@ -246,12 +338,7 @@ export function createProvider(options = {}) {
           response = await fetchImpl(endpoint, {
             method: 'POST',
             headers: headers(),
-            body: JSON.stringify({
-              model,
-              messages,
-              stream: true,
-              stream_options: { include_usage: true },
-            }),
+            body: JSON.stringify(chatBody(messages, true)),
             signal: controller.signal,
           });
         } catch (cause) {
@@ -405,7 +492,52 @@ export function createProvider(options = {}) {
         );
       }
       model = requested;
+      reasoningMode = 'auto';
+      reasoningCapability = undefined;
+      reasoningCapabilityModel = undefined;
       return Object.freeze({ model, source: discovered.source });
+    },
+
+    reasoningInfo: detectReasoningCapability,
+
+    reasoningConfiguration() {
+      return reasoningResult(
+        reasoningCapabilityModel === model && reasoningCapability
+          ? reasoningCapability.capability
+          : 'unknown',
+        reasoningCapabilityModel === model && reasoningCapability
+          ? reasoningCapability.method
+          : null,
+      );
+    },
+
+    async selectReasoning(mode) {
+      if (!REASONING_MODES.has(mode)) {
+        throw new ProviderError(`Invalid reasoning mode: ${mode}`, {
+          code: 'invalid_configuration',
+        });
+      }
+      if (mode === reasoningMode) return detectReasoningCapability();
+      if (mode === 'auto') {
+        reasoningMode = mode;
+        return reasoningResult(
+          reasoningCapability?.capability ?? 'unknown',
+          reasoningCapability?.method ?? null,
+        );
+      }
+
+      const capability = await detectReasoningCapability();
+      if (capability.capability !== 'supported') {
+        const unknown = capability.capability === 'unknown';
+        throw new ProviderError(
+          unknown
+            ? 'The endpoint does not expose verifiable reasoning control'
+            : 'The active model template does not support reasoning control',
+          { code: unknown ? 'unknown_reasoning' : 'unsupported_reasoning' },
+        );
+      }
+      reasoningMode = mode;
+      return reasoningResult('supported', capability.method);
     },
 
     configuration() {

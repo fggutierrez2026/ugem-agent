@@ -61,9 +61,9 @@
 
 ### T008 — Reasoning control
 - [x] Add `/reasoning auto|on|off` for the managed local llama.cpp server; restart the owned process and clear history when it changes.
-- [ ] Extend capability-aware reasoning interpretation to other backends/models.
-- [ ] Keep reasoning-generation control distinct from hiding/displaying reasoning content.
-- [ ] Report unsupported/unknown control honestly rather than claiming OFF.
+- [x] Extend capability-aware reasoning interpretation to external llama.cpp-compatible model templates using non-inference `/props` and `/apply-template` probes.
+- [x] Keep reasoning-generation control distinct from final-answer-only display; never append `reasoning_content` to rendered output or history.
+- [x] Report supported, unsupported and unknown control honestly; treat `auto` as the backend default rather than claiming OFF.
 - **Accept:** tests cover supported, unsupported, unknown capability and no-leak final-answer formatting.
 
 ### T009 — Context budget management

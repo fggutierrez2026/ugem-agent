@@ -92,7 +92,7 @@ export function createMetrics({
   now = () => performance.now(),
   contextBudget = null,
   serverLimit = null,
-  footer = false,
+  footer = true,
 } = {}) {
   let latest = null;
   let footerEnabled = Boolean(footer);
@@ -211,14 +211,23 @@ export function createMetrics({
     };
   }
 
-  function formatStats(record = latest) {
+  function formatStats(record = latest, { reasoning } = {}) {
+    const reasoningLine = reasoning == null
+      ? []
+      : [`Reasoning generation request: ${reasoning}.`];
     if (!record) {
-      return `Metrics: no completed answer yet.\nPer-answer footer: ${footerEnabled ? 'on' : 'off'}.\n`;
+      return [
+        ...reasoningLine,
+        'Metrics: no completed answer yet.',
+        `Per-answer footer: ${footerEnabled ? 'on' : 'off'}.`,
+        '',
+      ].join('\n');
     }
     const budget = record.context.budget ?? 'N/A';
     const limit = record.context.serverLimit ?? 'N/A';
     const contextBar = formatContextBar(record.context);
     return [
+      ...reasoningLine,
       `Input tokens: ${withSource(formatTokens(record.inputTokens), record.inputTokens)}`,
       `Output tokens: ${withSource(formatTokens(record.outputTokens), record.outputTokens)}`,
       `Latency: ${withSource(formatSeconds(record.latency.value), record.latency)}`,
@@ -239,8 +248,8 @@ export function createMetrics({
     const lines = [
       '  ── stats',
     ];
-    if (['auto', 'on', 'off'].includes(reasoning)) {
-      lines.push(`  mode       reasoning ${reasoning}`);
+    if (reasoning != null) {
+      lines.push(`  mode       reasoning request ${reasoning}`);
     }
     lines.push(
       `  response   ${formatTokens(record.outputTokens)} output tok (${record.outputTokens.source})`,

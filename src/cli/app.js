@@ -142,6 +142,32 @@ export function createCli({
     return 'Conversation cleared.';
   }
 
+  function reasoningStatus(info, { managed = false } = {}) {
+    let control;
+    if (managed) {
+      control = 'available through a managed server restart';
+    } else if (info.capability === 'supported') {
+      control = 'supported through verified per-request template control';
+    } else if (info.capability === 'unsupported') {
+      control = 'unsupported by the active model template';
+    } else {
+      control = 'unknown; the endpoint exposes no verifiable capability';
+    }
+    return [
+      `Generation request: ${info.mode ?? 'unknown'}.`,
+      `Control: ${control}.`,
+      'Reasoning content: hidden; display policy does not disable generation.',
+    ].join('\n');
+  }
+
+  function currentReasoningMode() {
+    return managedModelSelection()
+      ? localServer.configuration?.().reasoning ?? 'unknown'
+      : provider.reasoningConfiguration?.().mode
+        ?? runtimeHint.reasoning
+        ?? 'unknown';
+  }
+
   async function writeStartup() {
     const configuredModel = provider.configuration?.().model ?? 'unknown';
     let runtime = {
@@ -207,11 +233,9 @@ export function createCli({
       renderer.endAnswer();
       const record = measurement.finish();
       if (metrics.footerEnabled()) {
-        const reasoning = localServer.configuration?.().reasoning
-          ?? runtimeHint.reasoning;
         const footer = metrics.formatFooter(record, {
           width: output.columns ?? 80,
-          reasoning,
+          reasoning: currentReasoningMode(),
         });
         output.write('\n');
         output.write(formatMetricsPanel(footer, {
@@ -404,37 +428,87 @@ export function createCli({
     const reasoning = line.match(/^\/reasoning(?:\s+(\S+))?$/i);
     if (reasoning) {
       const requested = reasoning[1]?.toLowerCase();
+      const managed = managedModelSelection();
       if (!requested) {
-        const current = localServer.configuration?.().reasoning ?? 'unknown';
-        writeStatus(`Reasoning: ${current}.`, { title: 'reasoning' });
+        if (managed) {
+          const current = localServer.configuration?.().reasoning ?? 'unknown';
+          writeStatus(reasoningStatus({ mode: current }, { managed: true }), {
+            title: 'reasoning',
+          });
+        } else {
+          const info = typeof provider.reasoningInfo === 'function'
+            ? await provider.reasoningInfo()
+            : { mode: 'unknown', capability: 'unknown' };
+          writeStatus(reasoningStatus(info), { title: 'reasoning' });
+        }
         return true;
       }
       if (!['auto', 'on', 'off'].includes(requested)) {
         error.write('Usage: /reasoning [auto|on|off]\n');
         return true;
       }
-      if (typeof localServer.selectReasoning !== 'function') {
-        error.write('Reasoning control is unavailable for this server.\n');
+      if (managed) {
+        if (typeof localServer.selectReasoning !== 'function') {
+          error.write('Reasoning control is unavailable for this server.\n');
+          return true;
+        }
+        const previous = localServer.configuration?.().reasoning;
+        try {
+          const selected = await localServer.selectReasoning(requested, {
+            onStatus: () => {},
+          });
+          runtimeHint = selected;
+          if (selected.reasoning !== previous) {
+            resetConversation();
+            writeStatus(
+              `Reasoning generation request changed to ${selected.reasoning}. `
+              + 'Conversation cleared. Reasoning content remains hidden.',
+              { tone: 'success' },
+            );
+          } else {
+            writeStatus(
+              `Reasoning generation request ${selected.reasoning} is already active.`,
+            );
+          }
+          if (output.isTTY) await writeStartup();
+        } catch (cause) {
+          error.write(`Could not change reasoning: ${cause.message}\n`);
+        }
         return true;
       }
-      const previous = localServer.configuration?.().reasoning;
+
+      if (typeof provider.selectReasoning !== 'function') {
+        error.write(
+          'Could not change reasoning: the endpoint exposes no verifiable control.\n',
+        );
+        return true;
+      }
+      const previous = provider.reasoningConfiguration?.().mode ?? 'unknown';
       try {
-        const selected = await localServer.selectReasoning(requested, {
-          onStatus: () => {},
-        });
-        runtimeHint = selected;
-        if (selected.reasoning !== previous) {
+        const selected = await provider.selectReasoning(requested);
+        runtimeHint = {
+          ...runtimeHint,
+          reasoning: selected.mode,
+          reasoningControl: selected.capability,
+        };
+        if (selected.mode !== previous) {
           resetConversation();
           writeStatus(
-            `Reasoning changed to ${selected.reasoning}. Conversation cleared.`,
+            `Reasoning generation request changed to ${selected.mode}. `
+            + 'Conversation cleared. Reasoning content remains hidden.',
             { tone: 'success' },
           );
         } else {
-          writeStatus(`Reasoning ${selected.reasoning} is already active.`);
+          writeStatus(
+            `Reasoning generation request ${selected.mode} is already active.`,
+          );
         }
         if (output.isTTY) await writeStartup();
       } catch (cause) {
-        error.write(`Could not change reasoning: ${cause.message}\n`);
+        error.write(
+          `Could not change reasoning: ${cause.message}. `
+          + `Current request remains ${previous}.\n`,
+        );
       }
       return true;
     }
@@ -525,7 +599,9 @@ export function createCli({
       } else if (option) {
         error.write('Usage: /stats [on|off]\n');
       } else {
-        writeStatus(metrics.formatStats(), { title: 'stats' });
+        writeStatus(metrics.formatStats(undefined, {
+          reasoning: currentReasoningMode(),
+        }), { title: 'stats' });
       }
       return true;
     }

@@ -225,6 +225,90 @@ test('runtime inspection reads optional llama.cpp properties truthfully', async 
   });
 });
 
+test('reasoning control is enabled only after a template capability probe', async () => {
+  let completionBody;
+  await withServer(async (request, response) => {
+    if (request.url === '/props?model=thinker&autoload=false') {
+      response.end(JSON.stringify({ chat_template: '{{ enable_thinking }}' }));
+      return;
+    }
+    if (request.url === '/apply-template') {
+      const body = JSON.parse(await readBody(request));
+      const enabled = body.chat_template_kwargs.enable_thinking;
+      response.end(JSON.stringify({ prompt: enabled ? 'think prompt' : 'plain prompt' }));
+      return;
+    }
+    assert.equal(request.url, '/v1/chat/completions');
+    completionBody = JSON.parse(await readBody(request));
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write('data: {"choices":[{"delta":{"reasoning_content":"secret",'
+      + '"content":null}}]}\n\n');
+    response.write('data: {"choices":[{"delta":{"content":"final"}}]}\n\n');
+    response.end('data: [DONE]\n\n');
+  }, async (baseUrl) => {
+    const provider = createProvider({ baseUrl, model: 'thinker' });
+
+    assert.deepEqual(await provider.reasoningInfo(), {
+      mode: 'auto',
+      capability: 'supported',
+      method: 'chat_template_kwargs',
+      display: 'hidden',
+    });
+    assert.deepEqual(await provider.selectReasoning('off'), {
+      mode: 'off',
+      capability: 'supported',
+      method: 'chat_template_kwargs',
+      display: 'hidden',
+    });
+    assert.equal((await provider.reasoningInfo()).mode, 'off');
+
+    const chunks = [];
+    for await (const chunk of provider.stream([])) chunks.push(chunk);
+    assert.deepEqual(chunks, ['final']);
+    assert.deepEqual(completionBody.chat_template_kwargs, {
+      enable_thinking: false,
+    });
+    assert.equal(completionBody.reasoning_format, 'deepseek');
+  });
+});
+
+test('reasoning capability distinguishes unsupported from unknown control', async (context) => {
+  await context.test('unsupported model template', async () => {
+    await withServer(async (request, response) => {
+      if (request.url.startsWith('/props?')) {
+        response.end(JSON.stringify({ chat_template: 'static template' }));
+        return;
+      }
+      const body = JSON.parse(await readBody(request));
+      assert.equal(typeof body.chat_template_kwargs.enable_thinking, 'boolean');
+      response.end(JSON.stringify({ prompt: 'same prompt' }));
+    }, async (baseUrl) => {
+      const provider = createProvider({ baseUrl });
+      assert.equal((await provider.reasoningInfo()).capability, 'unsupported');
+      await assert.rejects(
+        provider.selectReasoning('off'),
+        (error) => error.code === 'unsupported_reasoning',
+      );
+      assert.equal(provider.reasoningConfiguration().mode, 'auto');
+    });
+  });
+
+  await context.test('unknown generic endpoint', async () => {
+    await withServer((request, response) => {
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: { message: 'not found' } }));
+    }, async (baseUrl) => {
+      const provider = createProvider({ baseUrl });
+      assert.equal((await provider.reasoningInfo()).capability, 'unknown');
+      await assert.rejects(
+        provider.selectReasoning('on'),
+        (error) => error.code === 'unknown_reasoning',
+      );
+      assert.equal(provider.reasoningConfiguration().mode, 'auto');
+    });
+  });
+});
+
 test('request timeout aborts an unresponsive server', async () => {
   await withServer(() => {}, async (baseUrl) => {
     const provider = createProvider({ baseUrl, timeoutMs: 20 });
